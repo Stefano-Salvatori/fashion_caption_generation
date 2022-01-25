@@ -35,7 +35,7 @@ vit_gpt2 = modelComponents(encoder=ViTModel, encoder_checkpoint='google/vit-base
 
 # ## Device & Batch size
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-batch_size = 16
+batch_size = 4
 
 # # Model and Data setup
 # ## Dataset class
@@ -204,8 +204,8 @@ def compute_metrics(eval_preds, decode:bool=True):
 
 # ## Triplet-Loss Test
 # ### Model and Data setup
-loss_type = 'entropy'
-step = 24000
+loss_type = 'triplet'
+step = 48000
 checkpoint = checkpoints_path + loss_type + '-checkpoint-' + str(step)
 model, tokenizer, data_train, data_val = init_model_and_data(vit_gpt2, checkpoint=checkpoint, n_train=-1, n_val=-1, subcategory=True)
 bert = BertModel.from_pretrained('bert-base-uncased')
@@ -215,8 +215,8 @@ bert = bert.to(device)
 
 # ### Tensorboard Monitoring
 tensorboard_path = drive_path+'tensorboard/'
-#log_path = tensorboard_path+"swap_from_scratch_subcat_altnorm_lowmargin"
-log_path = tensorboard_path+"entropy_subcat"
+log_path = tensorboard_path+"swap_from_scratch_subcat_altnorm_lowmargin"
+#log_path = tensorboard_path+"entropy_subcat"
 
 writer = SummaryWriter(log_dir=log_path)
 
@@ -276,10 +276,10 @@ class CustomLossTrainer(CustomTrainer):
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             entropy_loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        #triplet_loss = triplet_margin_loss(inputs["pixel_values"], negative)
-        final_loss = entropy_loss# + triplet_loss
+        triplet_loss = triplet_margin_loss(inputs["pixel_values"], negative)
+        final_loss = entropy_loss + triplet_loss
 
-        #writer.add_scalar("Loss/train/triplet", torch.mean(triplet_loss), self.step)
+        writer.add_scalar("Loss/train/triplet", torch.mean(triplet_loss), self.step)
         writer.add_scalar("Loss/train/entropy", torch.mean(entropy_loss), self.step)
         writer.add_scalar("Loss/train/final", torch.mean(final_loss), self.step)
         self.step += 1
@@ -295,14 +295,14 @@ training_args = Seq2SeqTrainingArguments(
     load_best_model_at_end = False,
     predict_with_generate = True,
     generation_num_beams = 3, 
-    eval_accumulation_steps = 2000,  # send logits and labels to cpu for evaluation step by step, rather than all together
-    evaluation_strategy = 'epoch',
+    eval_accumulation_steps = 4000,  # send logits and labels to cpu for evaluation step by step, rather than all together
+    evaluation_strategy = 'steps',
     save_strategy = 'steps',
     save_total_limit = 3,   # Only last [save_total_limit] models are saved. Older ones are deleted.
     save_steps = 1000,
-    #eval_steps = 16281,    # Evaluation and Save happens every [eval_steps] steps
+    eval_steps = 99999999,#16281,    # Evaluation and Save happens every [eval_steps] steps
     learning_rate = 3e-5,
-    num_train_epochs = 3,    # total number of training epochs
+    num_train_epochs = 2,    # total number of training epochs
     warmup_steps = 500,   # number of warmup steps for learning rate scheduler
     weight_decay = 0.01    # strength of weight decay
 )
@@ -318,5 +318,6 @@ trainer = CustomLossTrainer(
     eval_dataset = data_val   # evaluation dataset
 )
 
-trainer.train(checkpoint)
+#trainer.train(checkpoint)
+trainer.train()
 writer.flush()
