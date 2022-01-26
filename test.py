@@ -243,7 +243,7 @@ def load_predictions(load_metrics:bool=False):
   with open(drive_path + 'predictions/pred-' + loss_t + '-' + str(step) + '.npy', 'rb') as file:
     predicted = np.load(file, allow_pickle=True)
   predicted = [item for sublist in predicted for item in sublist]
-  predicted = pd.Series(map(lambda cap: tokenizer.batch_decode(cap, skip_special_tokens=True), predicted))
+  #predicted = pd.Series(map(lambda cap: tokenizer.batch_decode(cap, skip_special_tokens=True), predicted))
   # REAL CAPTIONS
   cap_val = list()
   for p in tqdm(FashionGenDataset(data_path + "fashiongen_validation.h5").raw_h5()["input_description"], position=0, leave=True):
@@ -265,7 +265,7 @@ def load_predictions(load_metrics:bool=False):
     print("LEN:::"+str(len(data.caption.values)))
     print("SHAPE:::"+str(data.caption.values.shape))
     for i in tqdm(range(0, len(data.caption.values))):
-      score = compute_metrics([torch.unsqueeze(data.caption.values[i], 0).cpu(), torch.unsqueeze(cap_val[i], 0).cpu()], decode=False)
+      score = compute_metrics([torch.unsqueeze(data.caption.values[i], 0).cpu(), torch.unsqueeze(cap_val[i], 0).cpu()], decode=True)
       # score = compute_metrics([[data.caption.values[i]], [cap_val[i]]], decode=False)
       avg_score = sum(score.values()) / len(score)
       scores.append(avg_score)
@@ -276,6 +276,6 @@ def load_predictions(load_metrics:bool=False):
   data['real'] = cap_val
   return data
 
-generate_predictions(model)
+#generate_predictions(model)
 data = load_predictions()
-print(tabulate(data, headers='keys', tablefmt='psql', showindex=False))
+print(tabulate(data.head(), headers='keys', tablefmt='psql', showindex=False))
