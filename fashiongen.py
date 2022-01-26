@@ -297,12 +297,12 @@ training_args = Seq2SeqTrainingArguments(
     generation_num_beams = 3, 
     eval_accumulation_steps = 4000,  # send logits and labels to cpu for evaluation step by step, rather than all together
     evaluation_strategy = 'steps',
-    save_strategy = 'steps',
+    save_strategy = 'epoch',
     save_total_limit = 3,   # Only last [save_total_limit] models are saved. Older ones are deleted.
     save_steps = 1000,
     eval_steps = 99999999,#16281,    # Evaluation and Save happens every [eval_steps] steps
     learning_rate = 3e-5,
-    num_train_epochs = 2,    # total number of training epochs
+    num_train_epochs = 1,    # total number of training epochs
     warmup_steps = 500,   # number of warmup steps for learning rate scheduler
     weight_decay = 0.01    # strength of weight decay
 )

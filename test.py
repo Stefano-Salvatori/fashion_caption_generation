@@ -265,7 +265,8 @@ def load_predictions(load_metrics:bool=False):
     print("LEN:::"+str(len(data.caption.values)))
     print("SHAPE:::"+str(data.caption.values.shape))
     for i in tqdm(range(0, len(data.caption.values))):
-      score = compute_metrics([[data.caption.values[i]], [cap_val[i]]], decode=False)
+      score = compute_metrics([torch.unsqueeze(data.caption.values[i], 0).cpu(), torch.unsqueeze(cap_val[i], 0).cpu()], decode=False)
+      # score = compute_metrics([[data.caption.values[i]], [cap_val[i]]], decode=False)
       avg_score = sum(score.values()) / len(score)
       scores.append(avg_score)
     with open(drive_path + 'predictions/metrics-' + loss_t + '-' + str(step) + '.npy', 'wb') as file:
