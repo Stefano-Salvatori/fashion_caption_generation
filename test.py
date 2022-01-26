@@ -266,7 +266,7 @@ def load_predictions(load_metrics:bool=False):
     print("SHAPE:::"+str(data.caption.values.shape))
     for i in tqdm(range(0, len(data.caption.values))):
       print(data.caption.values[i])
-      score = compute_metrics([torch.unsqueeze(data.caption.values[i], 0).cpu(), torch.unsqueeze(tokenizer.encode(cap_val[i])[0], 0).cpu()], decode=True)
+      score = compute_metrics([torch.unsqueeze(data.caption.values[i], 0).cpu(), torch.unsqueeze(torch.tensor(tokenizer.encode(cap_val[i])), 0).cpu()], decode=True)
       # score = compute_metrics([[data.caption.values[i]], [cap_val[i]]], decode=False)
       avg_score = sum(score.values()) / len(score)
       scores.append(avg_score)
