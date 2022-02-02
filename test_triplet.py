@@ -191,10 +191,8 @@ def compute_metrics(eval_preds, decode:bool=True):
     rouge = rouge_metric.compute(predictions=preds, references=labels)
 
     #split into list of tokens and remove spaces
-    #preds = [pred.split(' ') for pred in preds]
-    #labels = [[label.split(' ')] for label in labels]
-    preds = [[pred.split(' ') for pred in predlist] for predlist in preds]
-    labels = [[[label.split(' ')] for label in labelslist] for labelslist in labels]
+    preds = [pred.split(' ') for pred in preds]
+    labels = [[label.split(' ')] for label in labels]
 
     # bleu
     bleu = bleu_metric.compute(predictions=preds, references=labels)
@@ -280,9 +278,9 @@ def load_predictions(load_metrics:bool=False):
     with open(drive_path + 'predictions/metrics-' + loss_t + '-' + str(step) + '.npy', 'wb') as file:
       np.save(file, scores)
   # RETURN FINAL DATASET
-  data['score'] = scores
-  data['real'] = cap_val
-  return data
+  #data['score'] = scores
+  #data['real'] = cap_val
+  #return data
 
-generate_predictions(model)
-data = load_predictions()
+#generate_predictions(model)
+load_predictions()
