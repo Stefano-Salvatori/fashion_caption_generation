@@ -175,7 +175,7 @@ def compute_metrics(eval_preds, decode:bool=True):
     labels = [[label.split(' ')] for label in labels]
     # bleu
     bleu = bleu_metric.compute(predictions=preds, references=labels)
-    result = {"bleu": bleu["score"], "meteor": meteor['meteor']*100, "rougeL": rouge['rougeL'][1][2]*100, "bertscore":bertscore*100}
+    result = {"bleu": bleu["score"], "meteor": meteor['meteor']*100, "rougeL": rouge['rougeL'][1][2]*100, "bertscore":bertscore}
     # prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
     # result["gen_len"] = np.mean(prediction_lens)
     # result = {k: round(v, 4) for k, v in result.items()}
