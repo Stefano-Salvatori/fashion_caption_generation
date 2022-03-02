@@ -152,7 +152,7 @@ def init_model_and_data(component_config:modelComponents, n_train:int=-1, n_val:
 
 # ## Generate captions
 
-def generate_caption(model, pixel_values, num_beams:int=5, do_sample:bool=False, top_p:float=1.0, top_k:int=50, repetition_penalty:float=20.0, max_length:int=72, temperature:int=1.0):
+def generate_caption(model, pixel_values, num_beams:int=5, do_sample:bool=False, top_p:float=1.0, top_k:int=50, repetition_penalty:float=10.0, max_length:int=72, temperature:int=1.0):
     return model.generate(pixel_values,
                           num_beams=num_beams,
                           repetition_penalty=repetition_penalty,
@@ -172,6 +172,7 @@ def generate_caption(model, pixel_values, num_beams:int=5, do_sample:bool=False,
 bleu_metric = load_metric('sacrebleu')
 meteor_metric = load_metric('meteor')
 rouge_metric = load_metric('rouge')
+bertscore_metric = load_metric("bertscore")
 
 def compute_metrics(eval_preds, decode:bool=True):
     preds, labels = eval_preds
@@ -190,6 +191,9 @@ def compute_metrics(eval_preds, decode:bool=True):
     # rougeL
     rouge = rouge_metric.compute(predictions=preds, references=labels)
 
+    # bertscore
+    bertscore = bertscore_metric.compute(predictions=preds, references=labels, lang='en')
+
     #split into list of tokens and remove spaces
     preds = [pred.split(' ') for pred in preds]
     labels = [[label.split(' ')] for label in labels]
@@ -197,16 +201,16 @@ def compute_metrics(eval_preds, decode:bool=True):
     # bleu
     bleu = bleu_metric.compute(predictions=preds, references=labels)
     
-    result = {"bleu": bleu["score"], "meteor": meteor['meteor']*100, "rougeL": rouge['rougeL'][1][2]*100}
+    result = {"bleu": bleu["score"], "meteor": meteor['meteor']*100, "rougeL": rouge['rougeL'][1][2]*100, "bertscore":bertscore}
 
     # prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
     # result["gen_len"] = np.mean(prediction_lens)
-    result = {k: round(v, 4) for k, v in result.items()}
+    # result = {k: round(v, 4) for k, v in result.items()}
     return result
 
 # ## Triplet-Loss Test
 # ### Model and Data setup
-step = '48000-32562'
+step = '12'
 loss_t = "triplet"
 checkpoint = checkpoints_path + loss_t + '-checkpoint-' + str(step)
 model, tokenizer, data_train, data_val = init_model_and_data(vit_gpt2, checkpoint=checkpoint, n_train=-1, n_val=-1, subcategory=True)
@@ -263,7 +267,7 @@ def load_predictions(load_metrics:bool=False):
     scores['bleu'] = []
     scores['rougeL'] = []
     scores['meteor'] = []
-    scores['avg'] = []
+    scores['bertscore'] = []
     print("LEN:::"+str(len(data.caption.values)))
     print("SHAPE:::"+str(data.caption.values.shape))
     for i in tqdm(range(0, len(data.caption.values))):
@@ -273,8 +277,9 @@ def load_predictions(load_metrics:bool=False):
       scores['bleu'].append(score['bleu'])
       scores['meteor'].append(score['meteor'])
       scores['rougeL'].append(score['rougeL'])
-      avg_score = sum(score.values()) / len(score)
-      scores['avg'].append(avg_score)
+      scores['bertscore'].append(score['bertscore'])
+      #avg_score = sum(score.values()) / len(score)
+      #scores['avg'].append(avg_score)
     with open(drive_path + 'predictions/metrics-' + loss_t + '-' + str(step) + '.npy', 'wb') as file:
       np.save(file, scores)
   # RETURN FINAL DATASET
