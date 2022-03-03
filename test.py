@@ -12,8 +12,8 @@ from typing import Literal
 # TEST CONFIG
 loss_type = 'triplet' #[entropy,triplet]  loss del modello usato per generare le caption
 step = 12 #[5..12]
-regenerate_predictions = False  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
-regenerate_metrics = False #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
+regenerate_predictions = True  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
+regenerate_metrics = True #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
 print_metrics = True  #[True, False]
 
 # MAIN PATHS
@@ -64,7 +64,7 @@ class FashionGenTorchDataset(torch.utils.data.Dataset):
         self.subcategory = subcategory
 
     def __len__(self):
-        return self.n_samples
+        return 27#self.n_samples
 
     def preprocess_image(self, image):
         return self.img_processor(image, return_tensors="pt")['pixel_values'][0]
@@ -187,22 +187,27 @@ checkpoint = checkpoints_path + loss_type + '-checkpoint-' + str(step)
 model, tokenizer, data_train, data_val = init_model_and_data(vit_gpt2, checkpoint=checkpoint, n_train=-1, n_val=-1, subcategory=True)
 model = model.to(device)
 
-def generate_predictions(loss_type:LOSS_T, step:int, do_sample:bool=False):
-    predicted = list()
-    for i in tqdm(range(0, len(data_val), batch_size)):
-      batch = np.empty((batch_size, 3, 224, 224))
-      l = 0
-      for j in range(i, i+batch_size):
-        batch[l] = data_val[j]['pixel_values']
-        l+=1
-      batch = torch.tensor(batch, device=device, dtype=torch.float)
-      predicted.append(generate_caption(model, batch, do_sample=do_sample).cpu())
-    predicted = np.asarray(predicted)
-    # save to disk
-    with open(drive_path + 'predictions/pred-' + loss_type + '-' + str(step) + '.npy', 'wb') as file:
-      np.save(file, predicted)
+def generate_predictions(model, loss_type:LOSS_T, step:int, do_sample:bool=False):
+  predicted = list()
+  rem = len(data_val)%batch_size
+  for i in tqdm(range(0, len(data_val)-rem, batch_size)):
+    batch = np.empty((batch_size, 3, 224, 224))
+    l = 0
+    for j in range(i, i+batch_size):
+      batch[l] = data_val[j]['pixel_values']
+      l+=1
+    batch = torch.tensor(batch, device=device, dtype=torch.float)
+    predicted.append(generate_caption(model, batch, do_sample=do_sample).cpu())
+  if(rem != 0):
+    for i in range(len(data_val)-rem, len(data_val)):
+      predicted.append(generate_caption(model, torch.unsqueeze(data_val[i]['pixel_values'], 0).to(device), do_sample=do_sample).cpu())
+  predicted = np.asarray(predicted)
+  print(predicted)
+  # save to disk
+  with open(drive_path + 'predictions/pred-' + loss_type + '-' + str(step) + '.npy', 'wb') as file:
+    np.save(file, predicted)
 
-def compute_metrics(loss_type:LOSS_T, step:int, load_metrics:bool=False):
+def get_metrics(loss_type:LOSS_T, step:int, load_metrics:bool=False):
   with open(drive_path + 'predictions/pred-' + loss_type + '-' + str(step) + '.npy', 'rb') as file:
     predicted = np.load(file, allow_pickle=True)
   predicted = [item for sublist in predicted for item in sublist]
@@ -304,11 +309,11 @@ def print_metrics():
                       index=['Entropy', 'Triplet']))
 
 if(regenerate_predictions):
-  generate_predictions(model=model, loss_type=loss_type, step=step)
+  generate_predictions(model, loss_type=loss_type, step=step)
 if(regenerate_metrics):
-  compute_metrics(load_metrics=False, loss_type=loss_type, step=step)
+  get_metrics(load_metrics=False, loss_type=loss_type, step=step)
 else:
-  compute_metrics(load_metrics=True, loss_type=loss_type, step=step)
+  get_metrics(load_metrics=True, loss_type=loss_type, step=step)
 if(print_metrics):
   print_metrics()
   
