@@ -15,6 +15,7 @@ step = 12 #[5..12]
 regenerate_predictions = False  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
 regenerate_metrics = False #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
 print_metrics = True  #[True, False]
+batch_size = 4
 
 # MAIN PATHS
 drive_path = './' #'drive/MyDrive/Tesi/'
@@ -38,7 +39,6 @@ vit_gpt2 = modelComponents(encoder=ViTModel, encoder_checkpoint='google/vit-base
 
 # ## Device & Batch size
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-batch_size = 4
 
 # # Model and Data setup
 # ## Dataset class
