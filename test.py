@@ -12,8 +12,8 @@ from typing import Literal
 # TEST CONFIG
 loss_type = 'triplet' #[entropy,triplet]  loss del modello usato per generare le caption
 step = 12 #[5..12]
-regenerate_predictions = True  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
-regenerate_metrics = True #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
+regenerate_predictions = False  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
+regenerate_metrics = False #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
 print_metrics = True  #[True, False]
 
 # MAIN PATHS
@@ -64,7 +64,7 @@ class FashionGenTorchDataset(torch.utils.data.Dataset):
         self.subcategory = subcategory
 
     def __len__(self):
-        return 27#self.n_samples
+        return self.n_samples
 
     def preprocess_image(self, image):
         return self.img_processor(image, return_tensors="pt")['pixel_values'][0]
@@ -202,7 +202,6 @@ def generate_predictions(model, loss_type:LOSS_T, step:int, do_sample:bool=False
     for i in range(len(data_val)-rem, len(data_val)):
       predicted.append(generate_caption(model, torch.unsqueeze(data_val[i]['pixel_values'], 0).to(device), do_sample=do_sample).cpu())
   predicted = np.asarray(predicted)
-  print(predicted)
   # save to disk
   with open(drive_path + 'predictions/pred-' + loss_type + '-' + str(step) + '.npy', 'wb') as file:
     np.save(file, predicted)
@@ -234,8 +233,6 @@ def get_metrics(loss_type:LOSS_T, step:int, load_metrics:bool=False):
     scores['rougeL'] = []
     scores['meteor'] = []
     scores['bertscore'] = []
-    print("LEN:::"+str(len(data.caption.values)))
-    print("SHAPE:::"+str(data.caption.values.shape))
     for i in tqdm(range(0, len(data.caption.values))):
       # print(data.caption.values[i])
       score = compute_metrics([torch.unsqueeze(data.caption.values[i], 0).cpu(), torch.unsqueeze(torch.tensor(tokenizer.encode(cap_val[i])), 0).cpu()], decode=True)
