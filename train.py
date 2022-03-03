@@ -9,10 +9,23 @@ from modules.custom_trainer import CustomTrainer
 from modules.fashiongen_utils import FashionGenDataset
 from torch.utils.tensorboard import SummaryWriter
 
+# TRAIN CONFIG
+loss_type = 'triplet'
+step = 12
+batch_size = 4
+max_caption_len = 64
+
 # MAIN PATHS
 drive_path = './' #'drive/MyDrive/Tesi/'
 data_path = '../../../../mnt/ssd/salvatori/datasets/FashionGen/'
 checkpoints_path = './checkpoints/' #drive_path + 'checkpoints/'
+
+# ### Tensorboard Monitoring
+tensorboard_path = drive_path+'tensorboard/'
+log_path = tensorboard_path+"entropy_subcat" if loss_type == 'entropy' else tensorboard_path+"swap_from_scratch_subcat_altnorm_lowmargin_high_lr_test"
+step = 406100
+writer = SummaryWriter(log_dir=log_path)
+
 
 # class to hold components of Encoder-Decoder model
 class modelComponents():
@@ -35,7 +48,6 @@ vit_gpt2 = modelComponents(encoder=ViTModel, encoder_checkpoint='google/vit-base
 
 # ## Device & Batch size
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-batch_size = 4
 
 # # Model and Data setup
 # ## Dataset class
@@ -84,7 +96,7 @@ def load_data(tokenizer, img_processor, n_train, n_val, subcategory:bool=False):
   # append all captions in a single shallow list, tokenize everything
   tokenizer.padding_side = "left"
   tokenizer.pad_token = tokenizer.eos_token
-  cap = list(map(lambda caption: tokenizer.encode(caption.replace('<br>', ' '), return_tensors="pt", max_length=64, pad_to_max_length=True, truncation=True)[0], cap_train + cap_val))
+  cap = list(map(lambda caption: tokenizer.encode(caption.replace('<br>', ' '), return_tensors="pt", max_length=max_caption_len, pad_to_max_length=True, truncation=True)[0], cap_train + cap_val))
   # split into train and validation again
   cap_train = cap[0:len(cap_train)]
   cap_val = cap[len(cap_train):]
@@ -124,7 +136,7 @@ def init_model_and_data(component_config:modelComponents, n_train:int=-1, n_val:
   model.config.decoder_start_token_id = tokenizer.bos_token_id
   model.config.decoder.eos_token_id = tokenizer.eos_token_id
   model.config.decoder.do_sample = False
-  model.config.decoder.max_length = 64
+  model.config.decoder.max_length = max_caption_len
   # load and prepare data
   if(init_data):
     data_train, data_val = load_data(tokenizer, img_processor, n_train, n_val, subcategory)
@@ -133,7 +145,7 @@ def init_model_and_data(component_config:modelComponents, n_train:int=-1, n_val:
     return model, tokenizer
 
 # ## Generate captions
-def generate_caption(model, pixel_values, num_beams:int=3, do_sample:bool=False, top_p:float=1.0, top_k:int=50, repetition_penalty:float=10.0, max_length:int=64, temperature:int=1.0):
+def generate_caption(model, pixel_values, num_beams:int=3, do_sample:bool=False, top_p:float=1.0, top_k:int=50, repetition_penalty:float=10.0, max_length:int=max_caption_len, temperature:int=1.0):
     return model.generate(pixel_values,
                           num_beams=num_beams,
                           repetition_penalty=repetition_penalty,
@@ -183,8 +195,6 @@ def compute_metrics(eval_preds, decode:bool=True):
 
 # ## Triplet-Loss Test
 # ### Model and Data setup
-loss_type = 'triplet'
-step = 12
 checkpoint = checkpoints_path + loss_type + '-checkpoint-' + str(step)
 model, tokenizer, data_train, data_val = init_model_and_data(vit_gpt2, checkpoint=checkpoint, n_train=-1, n_val=-1, subcategory=True)
 bert = BertModel.from_pretrained('bert-base-uncased')
@@ -192,16 +202,7 @@ bert_tokenizer = BertTokenizerFast.from_pretrained('bert-base-uncased')
 model = model.to(device)
 bert = bert.to(device)
 
-# ### Tensorboard Monitoring
-tensorboard_path = drive_path+'tensorboard/'
-log_path = tensorboard_path+"entropy_subcat" if loss_type == 'entropy' else tensorboard_path+"swap_from_scratch_subcat_altnorm_lowmargin_high_lr_test"
-
-# per tensorboard
-step = 406100
-writer = SummaryWriter(log_dir=log_path)
-
 # ### Loss and Trainer config
-
 def normalize_0_to_1(x:torch.Tensor):
   # x -= x.min(1, keepdim=True)[0]
   # x /= x.max(1, keepdim=True)[0]
@@ -211,7 +212,7 @@ def normalize_0_to_1(x:torch.Tensor):
 def get_bert_embedding(text, normalize:bool=True, decode:bool=True):
   if(decode):
     text = tokenizer.batch_decode(text, skip_special_tokens=True)
-  input_ids = bert_tokenizer(text, truncation=True, max_length=64, padding='max_length', return_tensors='pt')['input_ids'].to(device)
+  input_ids = bert_tokenizer(text, truncation=True, max_length=max_caption_len, padding='max_length', return_tensors='pt')['input_ids'].to(device)
   with torch.no_grad():
     embedding = bert(input_ids)['pooler_output']
   embedding.requires_grad
