@@ -10,7 +10,7 @@ from modules.fashiongen_utils import FashionGenDataset
 from torch.utils.tensorboard import SummaryWriter
 
 # TRAIN CONFIG
-loss_type = 'triplet'
+loss_type = 'entropy'
 step = 12
 batch_size = 6
 max_caption_len = 64
