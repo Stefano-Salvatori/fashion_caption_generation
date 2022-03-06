@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 # TRAIN CONFIG
 loss_type = 'triplet'
 step = 12
-batch_size = 4
+batch_size = 6
 max_caption_len = 64
 
 # MAIN PATHS
@@ -23,7 +23,7 @@ checkpoints_path = './checkpoints/' #drive_path + 'checkpoints/'
 # ### Tensorboard Monitoring
 tensorboard_path = drive_path+'tensorboard/'
 log_path = tensorboard_path+"entropy_subcat" if loss_type == 'entropy' else tensorboard_path+"swap_from_scratch_subcat_altnorm_lowmargin_high_lr_test"
-step = 406100
+tensorboard_step = 406100
 writer = SummaryWriter(log_dir=log_path)
 
 
@@ -234,7 +234,7 @@ def triplet_margin_loss(pixel_values, negatives, swap:bool=True):
 class CustomLossTrainer(CustomTrainer):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.step = step
+        self.step = tensorboard_step
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
@@ -281,8 +281,8 @@ training_args = Seq2SeqTrainingArguments(
     save_total_limit = 3,   # Only last [save_total_limit] models are saved. Older ones are deleted.
     # save_steps = 1000,
     eval_steps = 99999999,#16281,    # Evaluation and Save happens every [eval_steps] steps
-    learning_rate = 4e-6,
-    num_train_epochs = 5,    # total number of training epochs
+    learning_rate = 4e-5,
+    num_train_epochs = 1,    # total number of training epochs
     warmup_steps = 500,   # number of warmup steps for learning rate scheduler
     weight_decay = 0.01    # strength of weight decay
 )
@@ -298,6 +298,6 @@ trainer = CustomLossTrainer(
     eval_dataset = data_val   # evaluation dataset
 )
 
-trainer.train(checkpoint)
-#trainer.train()
+#trainer.train(checkpoint)
+trainer.train()
 writer.flush()

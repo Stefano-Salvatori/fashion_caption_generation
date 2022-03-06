@@ -12,8 +12,8 @@ from typing import Literal
 # TEST CONFIG
 loss_type = 'triplet' #[entropy,triplet]  loss del modello usato per generare le caption
 step = 12 #[5..12]
-regenerate_predictions = True  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
-regenerate_metrics = True #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
+regenerate_predictions = False  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
+regenerate_metrics = False #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
 print_metrics = True  #[True, False]
 batch_size = 4
 
@@ -135,7 +135,7 @@ def init_model_and_data(component_config:modelComponents, n_train:int=-1, n_val:
 
 # ## Generate captions
 
-def generate_caption(model, pixel_values, num_beams:int=5, do_sample:bool=False, top_p:float=1.0, top_k:int=50, repetition_penalty:float=10.0, max_length:int=72, temperature:int=1.0):
+def generate_caption(model, pixel_values, num_beams:int=5, do_sample:bool=False, top_p:float=1.0, top_k:int=50, repetition_penalty:float=10.0, max_length:int=64, temperature:int=1.0):
     return model.generate(pixel_values,
                           num_beams=num_beams,
                           repetition_penalty=repetition_penalty,
