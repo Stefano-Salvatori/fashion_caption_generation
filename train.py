@@ -137,6 +137,7 @@ def init_model_and_data(component_config:modelComponents, n_train:int=-1, n_val:
   model.config.decoder.eos_token_id = tokenizer.eos_token_id
   model.config.decoder.do_sample = False
   model.config.decoder.max_length = max_caption_len
+  model.config.min_length = 48
   # load and prepare data
   if(init_data):
     data_train, data_val = load_data(tokenizer, img_processor, n_train, n_val, subcategory)

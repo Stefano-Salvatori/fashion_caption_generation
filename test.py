@@ -12,8 +12,8 @@ from typing import Literal
 # TEST CONFIG
 loss_type = 'triplet' #[entropy,triplet]  loss del modello usato per generare le caption
 step = 12 #[5..12]
-regenerate_predictions = False  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
-regenerate_metrics = False #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
+regenerate_predictions = True  #[True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
+regenerate_metrics = True #[True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
 print_metrics = True  #[True, False]
 batch_size = 4
 
@@ -124,6 +124,7 @@ def init_model_and_data(component_config:modelComponents, n_train:int=-1, n_val:
   model.config.decoder.eos_token_id = tokenizer.eos_token_id
   model.config.decoder.do_sample = False
   model.config.decoder.max_length = 64
+  model.config.min_length = 48
 
   # load and prepare data
   if(init_data):
