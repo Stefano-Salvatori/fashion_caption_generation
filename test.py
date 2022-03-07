@@ -12,8 +12,11 @@ from transformers import (
     ViTFeatureExtractor,
     VisionEncoderDecoderModel,
 )
+from modules.dataset import FashionGenTorchDataset
 from modules.fashiongen_utils import FashionGenDataset
 from typing import Literal
+
+from modules.train_utils import generate_caption
 
 # TEST CONFIG
 loss_type = "triplet"  # [entropy,triplet]  loss del modello usato per generare le caption
@@ -53,49 +56,6 @@ vit_gpt2 = modelComponents(
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # # Model and Data setup
-# ## Dataset class
-fashiongen_train = FashionGenDataset(data_path + "fashiongen_train.h5")
-
-
-class FashionGenTorchDataset(torch.utils.data.Dataset):
-    def __init__(self, file_name, caption_encodings, img_processor, n_samples: int, subcategory: bool = False):
-        self.n_samples = n_samples
-        self.file_path = file_name
-        self.dataset = h5py.File(file_name, mode="r")["input_image"]
-        self.caption_encodings = caption_encodings
-        self.img_processor = img_processor
-        self.subcategory = subcategory
-        if self.n_samples == -1:
-            self.n_samples = len(self.dataset)
-        else:
-            assert n_samples <= len(self.dataset), "n_samples must be <=" + str(len(self.dataset))
-
-    def __getitem__(self, idx):
-        return {
-            "pixel_values": self.preprocess_image(self.dataset[idx]),
-            "labels": self.caption_encodings[idx],
-            "negative": self.get_product_same_category(idx),
-        }
-
-    def set_subcategory(self, subcategory: bool):
-        self.subcategory = subcategory
-
-    def __len__(self):
-        return self.n_samples
-
-    def preprocess_image(self, image):
-        return self.img_processor(image, return_tensors="pt")["pixel_values"][0]
-
-    def get_product_same_category(self, index: int):
-        product = fashiongen_train.get_product(index)
-        if self.subcategory:
-            product.subcategory = product.subcategory.encode("ISO-8859-9")
-            similiar = fashiongen_train.get_same_subcategory_of(product)[0].image
-        else:
-            product.category = product.category.encode("ISO-8859-9")
-            similiar = fashiongen_train.get_same_category_of(product)[0].image
-        return self.preprocess_image(similiar).to(device)
-
 
 # ## Model and Dataset init
 
@@ -122,7 +82,12 @@ def load_data(tokenizer, img_processor, n_train, n_val, subcategory: bool = Fals
     )
     data_train = None
     data_val = FashionGenTorchDataset(
-        data_path + "fashiongen_validation.h5", cap_val, img_processor, n_samples=n_val, subcategory=subcategory
+        data_path + "fashiongen_validation.h5",
+        cap_val,
+        img_processor,
+        n_samples=n_val,
+        device=device,
+        subcategory=subcategory,
     )
     return data_train, data_val
 
@@ -176,37 +141,6 @@ def init_model_and_data(
         return model, tokenizer, data_train, data_val
     else:
         return model, tokenizer
-
-
-# ## Generate captions
-
-
-def generate_caption(
-    model,
-    pixel_values,
-    num_beams: int = 5,
-    do_sample: bool = False,
-    top_p: float = 1.0,
-    top_k: int = 50,
-    repetition_penalty: float = 10.0,
-    max_length: int = 72,
-    temperature: int = 1.0,
-):
-    return model.generate(
-        pixel_values,
-        num_beams=num_beams,
-        repetition_penalty=repetition_penalty,
-        # no_repeat_ngram_size=3,
-        decoder_start_token_id=tokenizer.bos_token_id,
-        pad_token_id=tokenizer.pad_token_id,
-        eos_token_id=tokenizer.eos_token_id,
-        do_sample=do_sample,
-        temperature=temperature,
-        top_k=top_k,
-        top_p=top_p,
-        max_length=max_length,
-        # bad_words_ids=[tokenizer.eos_token_id]
-    )
 
 
 # ## Evaluation metrics
