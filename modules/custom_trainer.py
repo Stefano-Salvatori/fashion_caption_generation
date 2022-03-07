@@ -1,3 +1,4 @@
+import collections
 from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 from packaging import version
@@ -7,7 +8,8 @@ from transformers.deepspeed import is_deepspeed_zero3_enabled
 from transformers import Trainer
 from transformers.trainer_utils import PredictionOutput
 from transformers.utils import logging
-from transformers import PreTrainedModel, TrainingArguments
+
+from modules.train_utils import triplet_margin_loss
 
 
 if version.parse(torch.__version__) >= version.parse("1.6"):
@@ -21,11 +23,11 @@ class CustomTrainer(Trainer):
     def __init__(self, generation_function, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.generation_function = generation_function if generation_function else self.model.generate
-        
+
     def evaluate(
         self,
         eval_dataset: Optional[Dataset] = None,
-        ignore_keys: Optional[List[str]] = ['negative'],
+        ignore_keys: Optional[List[str]] = ["negative"],
         metric_key_prefix: str = "eval",
         max_length: Optional[int] = None,
         num_beams: Optional[int] = None,
@@ -66,7 +68,7 @@ class CustomTrainer(Trainer):
     def predict(
         self,
         test_dataset: Dataset,
-        ignore_keys: Optional[List[str]] = ['negative'],
+        ignore_keys: Optional[List[str]] = ["negative"],
         metric_key_prefix: str = "eval",
         max_length: Optional[int] = None,
         num_beams: Optional[int] = None,
@@ -115,7 +117,7 @@ class CustomTrainer(Trainer):
         model: nn.Module,
         inputs: Dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = ['negative'],
+        ignore_keys: Optional[List[str]] = ["negative"],
     ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Perform an evaluation step on :obj:`model` using obj:`inputs`.
@@ -143,7 +145,6 @@ class CustomTrainer(Trainer):
                 model, inputs, prediction_loss_only=prediction_loss_only, ignore_keys=ignore_keys
             )
 
-        
         has_labels = "labels" in inputs
         inputs = self._prepare_inputs(inputs)
 
@@ -153,17 +154,14 @@ class CustomTrainer(Trainer):
             "num_beams": self._num_beams if self._num_beams is not None else self.model.config.decoder.num_beams,
             "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
             "repetition_penalty": self.model.config.decoder.repetition_penalty,
-			"no_repeat_ngram_size": self.model.config.decoder.no_repeat_ngram_size,
-			"decoder_start_token_id": self.model.config.decoder_start_token_id,
-			"eos_token_id": self.model.config.decoder.eos_token_id,
-			"do_sample": self.model.config.decoder.do_sample,
-			"max_length":self.model.config.decoder.max_length,
+            "no_repeat_ngram_size": self.model.config.decoder.no_repeat_ngram_size,
+            "decoder_start_token_id": self.model.config.decoder_start_token_id,
+            "eos_token_id": self.model.config.decoder.eos_token_id,
+            "do_sample": self.model.config.decoder.do_sample,
+            "max_length": self.model.config.decoder.max_length,
         }
 
-        generated_tokens = self.generation_function(
-            model = self.model,
-            pixel_values = inputs["pixel_values"]
-        )
+        generated_tokens = self.generation_function(model=self.model, pixel_values=inputs["pixel_values"])
         # in case the batch is shorter than max length, the output should be padded
         if generated_tokens.shape[-1] < gen_kwargs["max_length"]:
             generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
@@ -216,7 +214,7 @@ class CustomTrainer(Trainer):
         dataloader: DataLoader,
         description: str,
         prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[List[str]] = ['negative'],
+        ignore_keys: Optional[List[str]] = ["negative"],
         metric_key_prefix: str = "eval",
     ) -> PredictionOutput:
         """
@@ -289,9 +287,13 @@ class CustomTrainer(Trainer):
                 losses = loss.repeat(batch_size)
                 losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
             if logits is not None:
-                #preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
+                # preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
                 logits_reduced = np.argmax(logits, axis=-1)
-                preds_host = logits_reduced if preds_host is None else nested_concat(preds_host, logits_reduced, padding_index=-100)
+                preds_host = (
+                    logits_reduced
+                    if preds_host is None
+                    else nested_concat(preds_host, logits_reduced, padding_index=-100)
+                )
             if labels is not None:
                 labels_host = labels if labels_host is None else nested_concat(labels_host, labels, padding_index=-100)
             self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
@@ -337,3 +339,68 @@ class CustomTrainer(Trainer):
                 metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
 
         return PredictionOutput(predictions=preds, label_ids=label_ids, metrics=metrics)
+
+
+# ### CustomLossTrainer
+class CustomLossTrainer(CustomTrainer):
+    def __init__(
+        self,
+        tokenizer,
+        writer,
+        step=0,
+        triplet_margin=0.1,
+        triplet_text_embedder=None,
+        triplet_text_tokenizer=None,
+        max_text_embedding_length=64,
+        loss_type="entropy",
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.step = step
+        self.triplet_margin = triplet_margin
+        self.triplet_text_embedder = triplet_text_embedder
+        self.triplet_text_tokenizer = triplet_text_tokenizer
+        self.max_text_embedding_length = max_text_embedding_length
+        self.loss_type = loss_type
+        self.writer = writer
+        self.tokenizer = tokenizer
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+        Subclass and override for custom behavior.
+        """
+        negative = inputs.pop("negative")
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+        outputs = model(**inputs)
+        # Save past state if it exists
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+        if labels is not None:
+            entropy_loss = self.label_smoother(outputs, labels)
+        else:
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            entropy_loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+        if self.loss_type == "triplet":
+            triplet_loss = triplet_margin_loss(
+                model,
+                self.tokenizer,
+                self.triplet_text_embedder,
+                self.triplet_text_tokenizer,
+                inputs["pixel_values"],
+                negative,
+                max_text_embedding_len=self.max_text_embedding_length,
+                margin=self.triplet_margin,
+            )
+            final_loss = entropy_loss + triplet_loss
+            self.writer.add_scalar("Loss/train/triplet", torch.mean(triplet_loss), self.step)
+        else:
+            final_loss = entropy_loss
+        self.writer.add_scalar("Loss/train/entropy", torch.mean(entropy_loss), self.step)
+        self.writer.add_scalar("Loss/train/final", torch.mean(final_loss), self.step)
+        self.step += 1
+        return (final_loss, outputs) if return_outputs else final_loss
