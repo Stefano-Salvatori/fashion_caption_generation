@@ -168,6 +168,7 @@ def init_model_and_data(
     model.config.decoder.eos_token_id = tokenizer.eos_token_id
     model.config.decoder.do_sample = False
     model.config.decoder.max_length = 64
+    model.config.min_length = 48
 
     # load and prepare data
     if init_data:

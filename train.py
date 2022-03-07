@@ -29,10 +29,11 @@ checkpoints_path = "./checkpoints/"  # drive_path + 'checkpoints/'
 step = 0
 
 # TRAIN CONFIG
-loss_type = "triplet"  # triplet
+loss_type = 'entropy'
 step = 0
-batch_size = 4
+batch_size = 6
 max_caption_len = 64
+min_caption_length = 16
 checkpoint = None  # checkpoints_path + loss_type + "-checkpoint-" + str(step)
 
 generation_num_beams = 3
@@ -191,6 +192,7 @@ def init_model_and_data(
     model.config.decoder.eos_token_id = tokenizer.eos_token_id
     model.config.decoder.do_sample = False
     model.config.decoder.max_length = max_caption_len
+    model.config.min_length = min_caption_length
     # load and prepare data
     if init_data:
         data_train, data_val = load_data(tokenizer, img_processor, n_train, n_val, subcategory)
@@ -250,7 +252,6 @@ if loss_type == "triplet":
 else:
     bert, bert_tokenizer = None, None
 model = model.to(device)
-
 
 training_args = Seq2SeqTrainingArguments(
     dataloader_pin_memory=not device.type == "cuda",
