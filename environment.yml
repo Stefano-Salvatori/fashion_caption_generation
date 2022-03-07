@@ -1,8 +1,8 @@
 name: fashion_captioning
 channels:
   - pytorch
-  - conda-forge
   - huggingface
+  - conda-forge
   - defaults
 dependencies:
   - _libgcc_mutex=0.1=main
@@ -11,6 +11,7 @@ dependencies:
   - absl-py=0.15.0=pyhd3eb1b0_0
   - aiohttp=3.8.1=py39h7f8727e_0
   - aiosignal=1.2.0=pyhd3eb1b0_0
+  - appdirs=1.4.4=pyhd3eb1b0_0
   - arrow-cpp=3.0.0=py39h6b21186_4
   - async-timeout=4.0.1=pyhd3eb1b0_0
   - attrs=21.2.0=pyhd3eb1b0_0
@@ -19,6 +20,7 @@ dependencies:
   - aws-checksums=0.1.9=he6710b0_0
   - aws-sdk-cpp=1.8.185=hce553d0_0
   - beautifulsoup4=4.10.0=pyh06a4308_0
+  - black=19.10b0=py_0
   - blas=1.0=mkl
   - blinker=1.4=py39h06a4308_0
   - boost-cpp=1.73.0=h27cfd23_11
@@ -27,7 +29,7 @@ dependencies:
   - brotlipy=0.7.0=py39h27cfd23_1003
   - bzip2=1.0.8=h7b6447c_0
   - c-ares=1.18.1=h7f8727e_0
-  - ca-certificates=2021.10.26=h06a4308_2
+  - ca-certificates=2022.2.1=h06a4308_0
   - cachetools=4.2.2=pyhd3eb1b0_0
   - certifi=2021.10.8=py39h06a4308_2
   - cffi=1.14.6=py39h400218f_0
@@ -108,6 +110,7 @@ dependencies:
   - mkl_random=1.2.2=py39h51133e4_0
   - multidict=5.2.0=py39h7f8727e_2
   - multiprocess=0.70.12.2=py39h7f8727e_0
+  - mypy_extensions=0.4.3=py39h06a4308_1
   - ncurses=6.3=h7f8727e_2
   - nettle=3.7.3=hbbd107a_1
   - nltk=3.6.7=pyhd8ed1ab_0
@@ -121,6 +124,7 @@ dependencies:
   - orc=1.6.9=ha97a36c_3
   - packaging=21.3=pyhd3eb1b0_0
   - pandas=1.3.5=py39h8c16a72_0
+  - pathspec=0.7.0=py_0
   - pcre2=10.35=h14c3975_1
   - perl=5.26.2=h14c3975_0
   - pillow=8.4.0=py39h5aabda8_0
@@ -143,7 +147,7 @@ dependencies:
   - pytz=2021.3=pyhd3eb1b0_0
   - pyyaml=6.0=py39h7f8727e_1
   - re2=2020.11.01=h2531618_1
-  - readline=8.1.2=h7f8727e_0
+  - readline=8.1=h46c0cb4_0
   - regex=2021.8.3=py39h7f8727e_0
   - requests=2.27.1=pyhd3eb1b0_0
   - requests-oauthlib=1.3.0=py_0
@@ -159,9 +163,11 @@ dependencies:
   - tensorboard-data-server=0.6.0=py39hca6d32c_0
   - tensorboard-plugin-wit=1.6.0=py_0
   - tk=8.6.11=h1ccaba5_0
+  - toml=0.10.2=pyhd3eb1b0_0
   - torchaudio=0.10.1=py39_cu113
   - torchvision=0.11.2=py39_cu113
   - tqdm=4.62.3=pyhd3eb1b0_1
+  - typed-ast=1.4.3=py39h7f8727e_1
   - typing=3.10.0.0=py39h06a4308_0
   - typing-extensions=3.10.0.2=hd3eb1b0_0
   - typing_extensions=3.10.0.2=pyh06a4308_0
@@ -189,4 +195,4 @@ dependencies:
     - sacremoses==0.0.47
     - tokenizers==0.10.3
     - transformers==4.15.0
-prefix: /home/gennari/miniconda3/envs/fashion_captioning
+prefix: /home/salvatori/miniconda3/envs/fashion_captioning
