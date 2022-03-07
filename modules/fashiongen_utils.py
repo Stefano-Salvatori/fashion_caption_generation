@@ -1,4 +1,4 @@
-#@title Utility classes execute
+# @title Utility classes execute
 from typing import List
 import random
 import torch
@@ -13,24 +13,36 @@ FashionGen strings encoding
 """
 DEFAULT_STRINGS_ENCODING = "ISO-8859-9"
 
+
 @dataclass
 class Product:
-    p_id:int
-    caption:str
-    image:np.ndarray
-    category:str
-    subcategory:str
-    concat_caption:str = None
-    name:str = None
-    composition:str = None
-    department:str = None
-    gender:str = None
+    p_id: int
+    caption: str
+    image: np.ndarray
+    category: str
+    subcategory: str
+    concat_caption: str = None
+    name: str = None
+    composition: str = None
+    department: str = None
+    gender: str = None
     msrpUSD: float = None
     season: str = None
-    brand:str = None
-    pose:str = "id_gridfs_1"
-    index:int =-1
+    brand: str = None
+    pose: str = "id_gridfs_1"
+    index: int = -1
 
+    def decoded_caption(self):
+        return self.caption.decode(DEFAULT_STRINGS_ENCODING)
+
+    def decoded_category(self):
+        return self.category.decode(DEFAULT_STRINGS_ENCODING)
+
+    def decoded_subcategory(self):
+        return self.subcategory.decode(DEFAULT_STRINGS_ENCODING)
+
+    def decoded_name(self):
+        return self.name.decode(DEFAULT_STRINGS_ENCODING)
 
     def __lt__(self, other):
         return self.p_id < other.p_id
@@ -42,7 +54,9 @@ class Product:
         return hash((self.p_id, self.pose))
 
     def __str__(self):
-      return os.linesep.join([f"{a}: {v}" for a,v in self.__dict__.items() if isinstance(v, str) or isinstance(v,float)])
+        return os.linesep.join(
+            [f"{a}: {v}" for a, v in self.__dict__.items() if isinstance(v, str) or isinstance(v, float)]
+        )
 
 
 class FashionGenDataset:
@@ -82,11 +96,11 @@ class FashionGenDataset:
     def length(self):
         return len(self.dataset["input_productID"])
 
-    def distinct_products_in_subcategory(self, subcategory: str):
-        return set([p_id for _, p_id in self.subcategory_dict()[subcategory]])
+    def distinct_products_in_subcategory(self, subcategory: str, id_different_from: int = None):
+        return set([p_id for _, p_id in self.subcategory_dict()[subcategory] if p_id != id_different_from])
 
-    def distinct_products_in_category(self, category: str):
-        return set([p_id for _, p_id in self.category_dict()[category]])
+    def distinct_products_in_category(self, category: str, id_different_from: int = None):
+        return set([p_id for _, p_id in self.category_dict()[category] if p_id != id_different_from])
 
     def raw_h5(self):
         return self.dataset
@@ -94,27 +108,27 @@ class FashionGenDataset:
     def close_file(self):
         self.dataset.close()
 
-    def get_product(self, index, string_encoding = DEFAULT_STRINGS_ENCODING):
+    def get_product(self, index):
         """Return the product in the dataset at the specified index"""
         if self.__products_lodaded:
             return self.__loaded_products[index]
         else:
             return Product(
-                p_id=self.dataset["input_productID"][index][0], 
-                #name=self.dataset["input_name"][index][0].decode(string_encoding), 
-                caption=self.dataset["input_description"][index][0].decode(string_encoding),
-                #concat_caption=self.dataset["input_concat_description"][index][0].decode(string_encoding), 
-                image=self.dataset["input_image"][index], 
-                category=self.dataset["input_category"][index][0].decode(string_encoding), 
-                subcategory=self.dataset["input_subcategory"][index][0].decode(string_encoding), 
-                #pose=self.dataset["input_pose"][index][0].decode(string_encoding), 
-                #composition = self.dataset["input_composition"][index][0].decode(string_encoding),
-                #department = self.dataset["input_department"][index][0].decode(string_encoding),
-                #gender =  self.dataset["input_gender"][index][0].decode(string_encoding),
-                #msrpUSD = float(self.dataset["input_msrpUSD"][index][0]),
-                #season = self.dataset["input_season"][index][0].decode(string_encoding),
-                #brand = self.dataset["input_brand"][index][0].decode(string_encoding),
-                index=index
+                p_id=self.dataset["input_productID"][index][0],
+                # name=self.dataset["input_name"][index][0].decode(string_encoding),
+                caption=self.dataset["input_description"][index][0],  # .decode(string_encoding),
+                # concat_caption=self.dataset["input_concat_description"][index][0].decode(string_encoding),
+                image=self.dataset["input_image"][index],
+                category=self.dataset["input_category"][index][0],  # .decode(string_encoding),
+                subcategory=self.dataset["input_subcategory"][index][0],  # .decode(string_encoding),
+                # pose=self.dataset["input_pose"][index][0].decode(string_encoding),
+                # composition = self.dataset["input_composition"][index][0].decode(string_encoding),
+                # department = self.dataset["input_department"][index][0].decode(string_encoding),
+                # gender =  self.dataset["input_gender"][index][0].decode(string_encoding),
+                # msrpUSD = float(self.dataset["input_msrpUSD"][index][0]),
+                # season = self.dataset["input_season"][index][0].decode(string_encoding),
+                # brand = self.dataset["input_brand"][index][0].decode(string_encoding),
+                index=index,
             )
 
     def get_product_by_id(self, product_id: int, get_random: bool = False):
@@ -189,7 +203,7 @@ class FashionGenDataset:
     def get_same_subcategory_of(self, product: Product, n: int = 1) -> List[Product]:
         """
         Get a list of random products with the same subcategory of the given product (but with different product ids).
-        If the given subcategory has less products than the number n specified, some random product will be returned
+        If the given subcategory has less products than the number n specified, some random products will be selected
         Args:
             product: the product for which we want to find other ones with the same subcategory
             n: The number of products to return
@@ -197,9 +211,10 @@ class FashionGenDataset:
             A list of n products with different ids but same subcategory of the given one.
 
         """
-        negative_prods_idxs = [
-            index for index, p_id in self.subcategory_dict()[product.subcategory] if p_id != product.p_id
-        ]
+        # all available negative products in the product subcategory
+        negative_pids = self.distinct_products_in_subcategory(product.subcategory, product.p_id)
+        negative_prods_idxs = [random.choice(self.productID_dict()[p_id]) for p_id in negative_pids]
+
         return self.__get_random_products_by_indexes(negative_prods_idxs, product.p_id, n)
 
     def get_same_category_of(self, product: Product, n: int = 1) -> List[Product]:
@@ -212,7 +227,8 @@ class FashionGenDataset:
         Returns:
             A list of n products with different ids but same category of the given one.
         """
-        negative_prods_idxs = [index for index, p_id in self.category_dict()[product.category] if p_id != product.p_id]
+        negative_cat_pids = self.distinct_products_in_category(product.category, product.p_id)
+        negative_prods_idxs = [random.choice(self.productID_dict()[p_id]) for p_id in negative_cat_pids]
         return self.__get_random_products_by_indexes(negative_prods_idxs, product.p_id, n)
 
     def __get_random_products_by_indexes(
