@@ -1,3 +1,5 @@
 checkpoints
 best
 modules/__pycache__
+predictions/
+predictions_bk/
