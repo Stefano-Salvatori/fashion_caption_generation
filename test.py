@@ -1,3 +1,4 @@
+from json import decoder
 import h5py
 import numpy as np
 import torch
@@ -13,23 +14,32 @@ from transformers import (
     VisionEncoderDecoderModel,
 )
 from modules.dataset import FashionGenTorchDataset
-from modules.fashiongen_utils import FashionGenDataset
+from modules.fashiongen_utils import DEFAULT_STRINGS_ENCODING, FashionGenDataset
 from typing import Literal
-
-from modules.train_utils import generate_caption
+import os
 
 # TEST CONFIG
 loss_type = "triplet"  # [entropy,triplet]  loss del modello usato per generare le caption
 step = 12  # [5..12]
-regenerate_predictions = False  # [True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
-regenerate_metrics = False  # [True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
+regenerate_predictions = True  # [True, False]  rigenera le predizioni sul validation set o usa quelle salvate su file
+regenerate_metrics = True  # [True, False]  rigenera le metriche sul validation set o usa quelle salvate su file
 print_metrics = True  # [True, False]
-batch_size = 4
+
+# ## Device & Batch size
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+batch_size = 48
+
+decoder_max_text_length = 64
+decoder_min_text_length = 48
 
 # MAIN PATHS
 drive_path = "./"  #'drive/MyDrive/Tesi/'
-data_path = "../../../../mnt/ssd/salvatori/datasets/FashionGen/"
+validation_dataset_path = "/home/salvatori/datasets/FashionGen/fashiongen_validation.h5"
 checkpoints_path = "./checkpoints/"  # drive_path + 'checkpoints/'
+checkpoint_name = "checkpoint-130248"
+
+checkpoint = os.path.join(checkpoints_path, checkpoint_name)
+# checkpoints_path + loss_type + '-checkpoint-' + str(step)
 
 # class to hold components of Encoder-Decoder model
 class modelComponents:
@@ -52,20 +62,21 @@ vit_gpt2 = modelComponents(
     tokenizer=GPT2TokenizerFast,
 )
 
-# ## Device & Batch size
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# # Model and Data setup
 
 # ## Model and Dataset init
-
-
-def load_data(tokenizer, img_processor, n_train, n_val, subcategory: bool = False):
+def load_data(
+    dataset_path: str,
+    tokenizer,
+    img_processor,
+    n_val,
+    device: torch.device,
+    subcategory: bool = False,
+    max_text_length: int = 64,
+):
+    # encode captions
     cap_val = list()
-    for p in tqdm(
-        FashionGenDataset(data_path + "fashiongen_validation.h5").raw_h5()["input_description"], position=0, leave=True
-    ):
-        cap_val.append(p[0].decode("ISO-8859-9"))  # DEFUALT_STRINGS_ENCODING = "ISO-8859-9")
+    for p in tqdm(FashionGenDataset(dataset_path).raw_h5()["input_description"], position=0, leave=True):
+        cap_val.append(p[0].decode(DEFAULT_STRINGS_ENCODING))  # DEFUALT_STRINGS_ENCODING = DEFAULT_STRINGS_ENCODING)
     tokenizer.padding_side = "left"
     tokenizer.pad_token = tokenizer.eos_token
     cap_val = list(
@@ -73,32 +84,29 @@ def load_data(tokenizer, img_processor, n_train, n_val, subcategory: bool = Fals
             lambda caption: tokenizer.encode(
                 caption.replace("<br>", " "),
                 return_tensors="pt",
-                max_length=64,
-                pad_to_max_length=True,
+                max_length=max_text_length,
+                padding="max_length",
                 truncation=True,
             )[0],
             cap_val,
         )
     )
-    data_train = None
     data_val = FashionGenTorchDataset(
-        data_path + "fashiongen_validation.h5",
-        cap_val,
-        img_processor,
-        n_samples=n_val,
-        device=device,
-        subcategory=subcategory,
+        dataset_path, cap_val, img_processor, n_samples=n_val, device=device, subcategory=subcategory,
     )
-    return data_train, data_val
+    return data_val
 
 
 def init_model_and_data(
     component_config: modelComponents,
-    n_train: int = -1,
+    dataset_path: str,
+    device: torch.device,
     n_val: int = -1,
     checkpoint: str = None,
     init_data: bool = True,
     subcategory: bool = False,
+    max_text_length: int = 64,
+    min_text_length: int = 48,
 ):
     # load models and their configs from pretrained checkpoints
     if checkpoint is None:
@@ -132,15 +140,46 @@ def init_model_and_data(
     model.config.decoder_start_token_id = tokenizer.bos_token_id
     model.config.decoder.eos_token_id = tokenizer.eos_token_id
     model.config.decoder.do_sample = False
-    model.config.decoder.max_length = 64
-    model.config.min_length = 48
+    model.config.decoder.max_length = max_text_length
+    model.config.min_length = min_text_length
 
     # load and prepare data
     if init_data:
-        data_train, data_val = load_data(tokenizer, img_processor, n_train, n_val, subcategory)
-        return model, tokenizer, data_train, data_val
+        data_val = load_data(dataset_path, tokenizer, img_processor, n_val, device, subcategory)
+        return model, tokenizer, data_val
     else:
         return model, tokenizer
+
+
+# ## Generate captions
+
+
+def generate_caption(
+    model,
+    pixel_values,
+    num_beams: int = 5,
+    do_sample: bool = False,
+    top_p: float = 1.0,
+    top_k: int = 50,
+    repetition_penalty: float = 10.0,
+    max_length: int = 64,
+    temperature: int = 1.0,
+):
+    return model.generate(
+        pixel_values,
+        num_beams=num_beams,
+        repetition_penalty=repetition_penalty,
+        # no_repeat_ngram_size=3,
+        decoder_start_token_id=tokenizer.bos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+        do_sample=do_sample,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        max_length=max_length,
+        # bad_words_ids=[tokenizer.eos_token_id]
+    )
 
 
 # ## Evaluation metrics
@@ -183,23 +222,31 @@ def compute_metrics(eval_preds, decode: bool = True):
 
 
 LOSS_T = Literal["triplet", "entropy"]
-checkpoint = checkpoints_path + loss_type + "-checkpoint-" + str(step)
-model, tokenizer, data_train, data_val = init_model_and_data(
-    vit_gpt2, checkpoint=checkpoint, n_train=-1, n_val=-1, subcategory=True
+model, tokenizer, data_val = init_model_and_data(
+    vit_gpt2,
+    validation_dataset_path,
+    device=device,
+    checkpoint=checkpoint,
+    n_val=-1,
+    subcategory=False,
+    max_text_length=decoder_max_text_length,
+    min_text_length=decoder_min_text_length,
 )
 model = model.to(device)
 
 
-def generate_predictions(model, loss_type: LOSS_T, step: int, do_sample: bool = False):
+def generate_predictions(model, model_label: str, do_sample: bool = False):
     predicted = list()
     rem = len(data_val) % batch_size
+
+    # TODO: iterate dataset with dataloader
     for i in tqdm(range(0, len(data_val) - rem, batch_size)):
-        batch = np.empty((batch_size, 3, 224, 224))
+        batch = torch.zeros((batch_size, 3, 224, 224)).to(device)
         l = 0
         for j in range(i, i + batch_size):
             batch[l] = data_val[j]["pixel_values"]
             l += 1
-        batch = torch.tensor(batch, device=device, dtype=torch.float)
+        # batch = torch.tensor(batch, device=device, dtype=torch.float)
         predicted.append(generate_caption(model, batch, do_sample=do_sample).cpu())
     if rem != 0:
         for i in range(len(data_val) - rem, len(data_val)):
@@ -210,34 +257,30 @@ def generate_predictions(model, loss_type: LOSS_T, step: int, do_sample: bool = 
             )
     predicted = np.asarray(predicted)
     # save to disk
-    with open(drive_path + "predictions/pred-" + loss_type + "-" + str(step) + ".npy", "wb") as file:
+    with open(os.path.join(drive_path, f"predictions/pred-{model_label}.npy"), "wb") as file:
         np.save(file, predicted)
 
 
-def get_metrics(loss_type: LOSS_T, step: int, load_metrics: bool = False):
-    with open(drive_path + "predictions/pred-" + loss_type + "-" + str(step) + ".npy", "rb") as file:
+def get_metrics(model_label: str, load_metrics: bool = False):
+    with open(drive_path + f"predictions/pred-{model_label}.npy", "rb") as file:
         predicted = np.load(file, allow_pickle=True)
     predicted = [item for sublist in predicted for item in sublist]
     # predicted = pd.Series(map(lambda cap: tokenizer.batch_decode(cap, skip_special_tokens=True), predicted))
     # REAL CAPTIONS
     cap_val = list()
-    for p in tqdm(
-        FashionGenDataset(data_path + "fashiongen_validation.h5").raw_h5()["input_description"], position=0, leave=True
-    ):
-        cap_val.append(p[0].decode("ISO-8859-9"))  # DEFUALT_STRINGS_ENCODING = "ISO-8859-9")
+    for p in tqdm(FashionGenDataset(validation_dataset_path).raw_h5()["input_description"], position=0, leave=True):
+        cap_val.append(p[0].decode(DEFAULT_STRINGS_ENCODING))  # DEFUALT_STRINGS_ENCODING = DEFAULT_STRINGS_ENCODING)
     cap_val = cap_val[0 : len(predicted)]
     # CATEGORIES
     cat_val = list()
-    for p in tqdm(
-        FashionGenDataset(data_path + "fashiongen_validation.h5").raw_h5()["input_category"], position=0, leave=True
-    ):
-        cat_val.append(p[0].decode("ISO-8859-9"))  # DEFUALT_STRINGS_ENCODING = "ISO-8859-9")
+    for p in tqdm(FashionGenDataset(validation_dataset_path).raw_h5()["input_category"], position=0, leave=True):
+        cat_val.append(p[0].decode(DEFAULT_STRINGS_ENCODING))  # DEFUALT_STRINGS_ENCODING = DEFAULT_STRINGS_ENCODING)
     cat_val = pd.Series(cat_val[0 : len(predicted)])
     # DATAFRAME
     data = pd.DataFrame({"caption": predicted, "category": cat_val})
     # METRICS
     if load_metrics:
-        with open(drive_path + "predictions/metrics-" + loss_type + "-" + str(step) + ".npy", "rb") as file:
+        with open(os.path.join(drive_path, f"predictions/metrics-{model_label}.npy"), "wb") as file:
             scores = np.load(file, allow_pickle=True)
     else:
         scores = {}
@@ -261,7 +304,7 @@ def get_metrics(loss_type: LOSS_T, step: int, load_metrics: bool = False):
             scores["bertscore"].append(score["bertscore"])
             # avg_score = sum(score.values()) / len(score)
             # scores['avg'].append(avg_score)
-        with open(drive_path + "predictions/metrics-" + loss_type + "-" + str(step) + ".npy", "wb") as file:
+        with open(os.path.join(drive_path, f"predictions/metrics-{model_label}.npy"), "wb") as file:
             np.save(file, scores)
     # RETURN FINAL DATASET
     # data['score'] = scores
@@ -269,27 +312,29 @@ def get_metrics(loss_type: LOSS_T, step: int, load_metrics: bool = False):
     # return data
 
 
-def print_metrics():
+def print_metrics(model_label: str):
     # TRIPLET
-    with open(drive_path + "predictions/metrics-triplet-" + str(step) + ".npy", mode="rb") as file:
+    with open(os.path.join(drive_path, f"predictions/metrics-{model_label}.npy"), "wb") as file:
         metrics_triplet = np.load(file, allow_pickle=True).item()
     metrics_triplet = pd.Series(metrics_triplet)
     metrics_triplet.bleu = [val if val != 0 else np.nan for val in metrics_triplet.bleu]
     metrics_triplet.meteor = [val if val != 0 else np.nan for val in metrics_triplet.meteor]
     metrics_triplet.rougeL = [val if val != 0 else np.nan for val in metrics_triplet.rougeL]
     metrics_triplet.bertscore = [val if val != 0 else np.nan for val in metrics_triplet.bertscore]
-    with open(drive_path + "predictions/pred-triplet-" + str(step) + ".npy", mode="rb") as file:
+    with open(os.path.join(drive_path, f"predictions/pred-{model_label}.npy"), mode="rb") as file:
         predictions_triplet = np.load(file, allow_pickle=True)
     predictions_triplet = pd.Series(predictions_triplet)
+
+    # TODO: need to remove this: we only print metrics of the model we want to test. For now load the same things as above
     # ENTROPY
-    with open(drive_path + "predictions/metrics-entropy-" + str(step) + ".npy", mode="rb") as file:
+    with open(os.path.join(drive_path, f"predictions/metrics-{model_label}.npy"), "wb") as file:
         metrics_entropy = np.load(file, allow_pickle=True).item()
     metrics_entropy = pd.Series(metrics_entropy)
     metrics_entropy.bleu = [val if val != 0 else np.nan for val in metrics_entropy.bleu]
     metrics_entropy.meteor = [val if val != 0 else np.nan for val in metrics_entropy.meteor]
     metrics_entropy.rougeL = [val if val != 0 else np.nan for val in metrics_entropy.rougeL]
     metrics_entropy.bertscore = [val if val != 0 else np.nan for val in metrics_entropy.bertscore]
-    with open(drive_path + "predictions/pred-entropy-" + str(step) + ".npy", mode="rb") as file:
+    with open(os.path.join(drive_path, f"predictions/pred-{model_label}.npy"), mode="rb") as file:
         predictions_entropy = np.load(file, allow_pickle=True)
     predictions_entropy = pd.Series(predictions_entropy)
     metrics_triplet.bertf1 = []
@@ -341,10 +386,11 @@ def print_metrics():
 
 
 if regenerate_predictions:
-    generate_predictions(model, loss_type=loss_type, step=step)
+    generate_predictions(model, model_label=checkpoint_name)
 if regenerate_metrics:
-    get_metrics(load_metrics=False, loss_type=loss_type, step=step)
+    get_metrics(load_metrics=False, model_label=checkpoint_name)
 else:
-    get_metrics(load_metrics=True, loss_type=loss_type, step=step)
+    get_metrics(load_metrics=True, model_label=checkpoint_name)
 if print_metrics:
     print_metrics()
+

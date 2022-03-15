@@ -1,4 +1,39 @@
+from dataclasses import dataclass
+from typing import List
 import torch
+from transformers import AutoTokenizer, PreTrainedTokenizer, PretrainedConfig
+from transformers.feature_extraction_utils import FeatureExtractionMixin
+
+
+class ModelComponents:
+    def __init__(
+        self,
+        encoder_checkpoint: str,
+        decoder_checkpoint: str,
+        img_processor: FeatureExtractionMixin,
+        generation_config: PretrainedConfig,
+    ):
+        self.encoder_checkpoint = encoder_checkpoint
+        self.decoder_checkpoint = decoder_checkpoint
+        self.generation_config = generation_config
+        self.img_processor = img_processor.from_pretrained(self.encoder_checkpoint)
+        self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(decoder_checkpoint)
+
+
+@dataclass
+class GenerationConfig:
+    max_length: int = 64
+    min_length: int = 0
+    do_sample: bool = False
+    num_beams: int = 3
+    temperature: float = 1.0
+    top_k: int = 50
+    top_p: float = 1.0
+    diversity_penalty: float = 0.0
+    repetition_penalty: float = 10.0
+    length_penalty: float = 1.0
+    no_repeat_ngram_size: int = 0
+    bad_words_ids: List[int] = None
 
 
 def generate_caption(
@@ -38,6 +73,7 @@ def normalize_0_to_1(x: torch.Tensor):
 
 
 def get_bert_embedding(model, tokenizer, text, max_text_len: int, normalize: bool = True):
+    # TODO: replace with huggingface pipeline
     text = tokenizer.batch_decode(text, skip_special_tokens=True)
     input_ids = tokenizer(
         text, truncation=True, max_length=max_text_len, padding="max_length", return_tensors="pt"

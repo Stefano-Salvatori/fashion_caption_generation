@@ -1,4 +1,4 @@
-import h5py
+import random
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -6,199 +6,208 @@ from datasets import load_metric
 from transformers import (
     AutoModel,
     AutoTokenizer,
-    GPT2Model,
-    BertModel,
-    BertTokenizerFast,
-    GPT2TokenizerFast,
-    ViTModel,
+    PreTrainedTokenizer,
+    PretrainedConfig,
+    SchedulerType,
     ViTFeatureExtractor,
     VisionEncoderDecoderModel,
     Seq2SeqTrainingArguments,
 )
-from modules.custom_trainer import CustomLossTrainer
-from modules.dataset import FashionGenTorchDataset
+from modules.custom_trainer import CustomTrainer
+from modules.dataset import FashionGenTorchDataset, NegativeSampleType
 from modules.fashiongen_utils import FashionGenDataset, DEFAULT_STRINGS_ENCODING
-from torch.utils.tensorboard import SummaryWriter
+from dataclasses import fields
+from modules.train_utils import GenerationConfig, ModelComponents
+from transformers.utils import logging
+import os
 
-from modules.train_utils import generate_caption
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+logger = logging.get_logger(__name__)
+
 
 # MAIN PATHS
-drive_path = "./"  #'drive/MyDrive/Tesi/'
+random_seed = 42
+random.seed(random_seed)
+torch.manual_seed(random_seed)
+
 data_path = "/home/salvatori/datasets/FashionGen/"
+fashiongen_train_file = "fashiongen_train.h5"
+fashiongen_validation_file = "fashiongen_validation.h5"
 checkpoints_path = "./checkpoints/"  # drive_path + 'checkpoints/'
-step = 0
 
 # TRAIN CONFIG
-loss_type = 'entropy'
+loss_type = "entropy"
 step = 0
-batch_size = 6
-max_caption_len = 64
-min_caption_length = 16
+train_batch_size = 12
+eval_batch_size = 64
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+num_workers = 4
+
 checkpoint = None  # checkpoints_path + loss_type + "-checkpoint-" + str(step)
 
-generation_num_beams = 3
 save_total_limit = 3
-learning_rate = 4e-6
+eval_steps = 25000
+lr_scheduler_type = SchedulerType.COSINE
+learning_rate = 2e-5
 num_train_epochs = 5
 warmup_steps = 500
 weight_decay = 0.01
+
 predict_with_generate = True
 
-generation_do_sample = False
-generation_top_p = 1.0
-generation_top_k = 50
-generation_repetition_penalty = 10.0
-generation_temperature = 1.0
+generation_config = GenerationConfig(
+    max_length=128,
+    min_length=0,
+    do_sample=False,
+    num_beams=1,
+    temperature=1.0,
+    top_k=50,
+    top_p=1.0,
+    diversity_penalty=0.0,
+    repetition_penalty=10.0,
+    length_penalty=1.0,
+    no_repeat_ngram_size=0,
+    bad_words_ids=None,
+)
 
 triplet_margin = 0.1
 pretrained_text_embedder = "bert-base-uncased"
+negative_sample_type = NegativeSampleType.RANDOM  # NegativeSampleType.SAME_SUBCATEGORY
 
-fashiongen_train_file = "fashiongen_train.h5"
-fashiongen_validation_file = "fashiongen_validation.h5"
-
-print(f"Available devices= {torch.cuda.device_count()}")
+logger.info(f"Available devices= {torch.cuda.device_count()}")
 
 # ### Tensorboard Monitoring
-tensorboard_path = drive_path + "tensorboard/"
-log_path = (
-    tensorboard_path + "entropy_subcat"
-    if loss_type == "entropy"
-    else tensorboard_path + "swap_from_scratch_subcat_altnorm_lowmargin_high_lr_test"
-)
-
-writer = SummaryWriter(log_dir=log_path)
-
-
-# class to hold components of Encoder-Decoder model
-class modelComponents:
-    def __init__(self, encoder, encoder_checkpoint, decoder, decoder_checkpoint, img_processor, tokenizer):
-        self.encoder_checkpoint = encoder_checkpoint
-        self.decoder_checkpoint = decoder_checkpoint
-        self.img_processor = img_processor
-        self.tokenizer = tokenizer
-        self.encoder = encoder
-        self.decoder = decoder
+experiment_name = "entropy"
+log_path = os.path.join("tensorboard", experiment_name)
+# log_path = os.path.join(tensorboard_path, experiment_name)
+# writer = SummaryWriter(log_dir=log_path)
 
 
 # component configurations
-vit_bert = modelComponents(
-    encoder=ViTModel,
+vit_bert = ModelComponents(
     encoder_checkpoint="google/vit-base-patch16-224-in21k",
-    decoder=BertModel,
     decoder_checkpoint="bert-base-uncased",
     img_processor=ViTFeatureExtractor,
-    tokenizer=BertTokenizerFast,
+    generation_config=generation_config,
 )
 
-vit_gpt2 = modelComponents(
-    encoder=ViTModel,
+vit_gpt2 = ModelComponents(
     encoder_checkpoint="google/vit-base-patch16-224-in21k",
-    decoder=GPT2Model,
     decoder_checkpoint="gpt2",
     img_processor=ViTFeatureExtractor,
-    tokenizer=GPT2TokenizerFast,
+    generation_config=generation_config,
 )
 
-# ## Device & Batch size
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # # Model and Data setup
 # ## Model and Dataset init
-
-
-def load_data(tokenizer, img_processor, n_train, n_val, subcategory: bool = False):
+def load_data(
+    dataset_train_path: str,
+    dataset_validation_path: str,
+    tokenizer: PreTrainedTokenizer,
+    img_processor,
+    n_train,
+    n_val,
+    negative_sample_type: NegativeSampleType,
+):
+    logger.info("Encoding captions")
     cap_train = list()
-    for p in tqdm(FashionGenDataset(data_path + fashiongen_train_file).raw_h5()["input_description"]):
-        cap_train.append(p[0].decode(DEFAULT_STRINGS_ENCODING))
+    for p in tqdm(FashionGenDataset(dataset_train_path).raw_h5()["input_description"]):
+        cap_train.append(p[0].decode(DEFAULT_STRINGS_ENCODING).replace("<br>", " "))
     cap_val = list()
-    for p in tqdm(FashionGenDataset(data_path + fashiongen_validation_file).raw_h5()["input_description"]):
-        cap_val.append(p[0].decode(DEFAULT_STRINGS_ENCODING))
-    # append all captions in a single shallow list, tokenize everything
-    tokenizer.padding_side = "left"
-    tokenizer.pad_token = tokenizer.eos_token
-    cap = list(
-        map(
-            lambda caption: tokenizer.encode(
-                caption.replace("<br>", " "),
-                return_tensors="pt",
-                max_length=max_caption_len,
-                padding="max_length",
-                truncation=True,
-            )[0],
-            cap_train + cap_val,
-        )
-    )
-    # split into train and validation again
-    cap_train = cap[0 : len(cap_train)]
-    cap_val = cap[len(cap_train) :]
-    # create datasets
+    for p in tqdm(FashionGenDataset(dataset_validation_path).raw_h5()["input_description"]):
+        cap_val.append(p[0].decode(DEFAULT_STRINGS_ENCODING).replace("<br>", " "))
+
+    # tokenizer.padding_side = "left"  # TODO: why?
+    if not tokenizer.pad_token:
+        # we can use the  EOS token as PAD token if the tokenizer doesn't have one
+        # (https://huggingface.co/docs/transformers/master/model_doc/vision-encoder-decoder#:~:text=model.config.pad_token_id%20%3D%20model.config.eos_token_id)
+        tokenizer.pad_token = tokenizer.eos_token
+
+    cap_train = tokenizer.batch_encode_plus(cap_train, return_tensors="pt", padding=True)
+    cap_val = tokenizer.batch_encode_plus(cap_val, return_tensors="pt", padding=True)
+
+    logger.info("Creating torch train/validation datasets")
     data_train = FashionGenTorchDataset(
-        data_path + fashiongen_train_file,
+        dataset_train_path,
         cap_train,
         img_processor,
         n_samples=n_train,
         device=device,
-        subcategory=subcategory,
+        negative_sample_type=negative_sample_type,
     )
     data_val = FashionGenTorchDataset(
-        data_path + fashiongen_validation_file,
+        dataset_validation_path,
         cap_val,
         img_processor,
         n_samples=n_val,
         device=device,
-        subcategory=subcategory,
+        negative_sample_type=negative_sample_type,
     )
     return data_train, data_val
 
 
 def init_model_and_data(
-    component_config: modelComponents,
+    component_config: ModelComponents,
+    dataset_train_path: str,
+    dataset_validation_path: str,
     n_train: int = -1,
     n_val: int = -1,
     checkpoint: str = None,
     init_data: bool = True,
-    subcategory: bool = False,
+    negative_sample_type: NegativeSampleType = NegativeSampleType.RANDOM,
 ):
+    logger.info("Initializing model")
     # load models and their configs from pretrained checkpoints
     if checkpoint is None:
-        model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
+        model: VisionEncoderDecoderModel = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
             component_config.encoder_checkpoint, component_config.decoder_checkpoint
         )
     else:
-        model = VisionEncoderDecoderModel.from_pretrained(checkpoint)
+        model: VisionEncoderDecoderModel = VisionEncoderDecoderModel.from_pretrained(checkpoint)
+    # Should be automatically set by previous methods
     # set decoder config to causal lm
-    model.config.decoder_is_decoder = True
-    model.config.decoder_add_cross_attention = True
-    # set img_processor & tokenizer
-    img_processor = component_config.img_processor.from_pretrained(component_config.encoder_checkpoint)
-    tokenizer = component_config.tokenizer.from_pretrained(component_config.decoder_checkpoint)
-    # decoder-specific config
-    if component_config.decoder == BertModel:
-        model.config.decoder_start_token_id = tokenizer.cls_token_id
-        model.config.decoder_bos_token_id = tokenizer.cls_token_id
-        model.config.decoder_eos_token_id = tokenizer.sep_token_id
-    else:
-        model.config.decoder_start_token_id = tokenizer.bos_token_id
-        model.config.decoder_bos_token_id = tokenizer.bos_token_id
-        model.config.decoder_eos_token_id = tokenizer.eos_token_id
-        tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = tokenizer.pad_token_id
-    model.decoder.config.pad_token_id = tokenizer.pad_token_id
-    model.config.encoder.pad_token_id = tokenizer.pad_token_id
-    # generation arguments
-    model.config.decoder.repetition_penalty = 10.0
-    model.config.decoder.no_repeat_ngram_size = None
-    model.config.decoder_start_token_id = tokenizer.bos_token_id
-    model.config.decoder.eos_token_id = tokenizer.eos_token_id
-    model.config.decoder.do_sample = False
-    model.config.decoder.max_length = max_caption_len
-    model.config.min_length = min_caption_length
+    # model.config.decoder_is_decoder = True
+    # model.config.decoder_add_cross_attention = True
+
+    model.config.decoder_start_token_id = component_config.tokenizer.bos_token_id
+    model.config.decoder_bos_token_id = component_config.tokenizer.bos_token_id
+    model.config.decoder_eos_token_id = component_config.tokenizer.eos_token_id
+
+    # we can use the  EOS token as PAD token if the tokenizer doesn't have one
+    # (https://huggingface.co/docs/transformers/master/model_doc/vision-encoder-decoder#:~:text=model.config.pad_token_id%20%3D%20model.config.eos_token_id)
+    model.config.pad_token_id = (
+        component_config.tokenizer.eos_token_id
+        if not component_config.tokenizer.pad_token_id
+        else component_config.tokenizer.pad_token_id
+    )
+
+    model.config.decoder_start_token_id = component_config.tokenizer.bos_token_id
+    model.config.decoder.eos_token_id = component_config.tokenizer.eos_token_id
+    # component_config.tokenizer.pad_token = component_config.tokenizer.eos_token
+
+    # model.decoder.config.pad_token_id = component_config.tokenizer.pad_token_id
+    # model.config.encoder.pad_token_id = component_config.tokenizer.pad_token_id
+
+    # set generation arguments
+    for field in fields(component_config.generation_config):
+        setattr(model.config.decoder, field.name, getattr(component_config.generation_config, field.name))
+
     # load and prepare data
     if init_data:
-        data_train, data_val = load_data(tokenizer, img_processor, n_train, n_val, subcategory)
-        return model, tokenizer, data_train, data_val
+        data_train, data_val = load_data(
+            dataset_train_path=dataset_train_path,
+            dataset_validation_path=dataset_validation_path,
+            tokenizer=component_config.tokenizer,
+            img_processor=component_config.img_processor,
+            n_train=n_train,
+            n_val=n_val,
+            negative_sample_type=negative_sample_type,
+        )
+        return model, component_config.tokenizer, data_train, data_val
     else:
-        return model, tokenizer
+        return model, component_config.tokenizer
 
 
 # ## Evaluation metrics
@@ -243,9 +252,16 @@ def compute_metrics(eval_preds, decode: bool = True):
 # ## Triplet-Loss Test
 # ### Model and Data setup
 model, tokenizer, data_train, data_val = init_model_and_data(
-    vit_gpt2, checkpoint=checkpoint, n_train=-1, n_val=-1, subcategory=True
+    component_config=vit_gpt2,
+    dataset_train_path=os.path.join(data_path, fashiongen_train_file),
+    dataset_validation_path=os.path.join(data_path, fashiongen_validation_file),
+    checkpoint=checkpoint,
+    n_train=-1,
+    n_val=-1,
+    negative_sample_type=negative_sample_type,
 )
 if loss_type == "triplet":
+    # TODO: replace manual bert encoding with huggingface pipeline ("feature-extraction")
     bert = AutoModel.from_pretrained(pretrained_text_embedder)
     bert_tokenizer = AutoTokenizer.from_pretrained(pretrained_text_embedder)
     bert = bert.to(device)
@@ -255,38 +271,41 @@ model = model.to(device)
 
 training_args = Seq2SeqTrainingArguments(
     dataloader_pin_memory=not device.type == "cuda",
-    per_device_train_batch_size=batch_size,  # batch size per device during training
-    per_device_eval_batch_size=batch_size,  # batch size for evaluation
-    output_dir=checkpoints_path,  # output directory
-    overwrite_output_dir=False,
+    per_device_train_batch_size=train_batch_size,  # batch size per device during training
+    per_device_eval_batch_size=eval_batch_size,  # batch size for evaluation
+    output_dir=checkpoints_path,  # output directory,
+    logging_dir=log_path,
+    run_name=experiment_name,
     load_best_model_at_end=False,
     predict_with_generate=predict_with_generate,
-    generation_num_beams=generation_num_beams,
-    eval_accumulation_steps=4000,  # send logits and labels to cpu for evaluation step by step, rather than all together
+    generation_num_beams=generation_config.num_beams,
+    #eval_accumulation_steps=2,  # send logits and labels to cpu for evaluation step by step, rather than all together
     evaluation_strategy="steps",
     save_strategy="epoch",
     save_total_limit=save_total_limit,  # Only last [save_total_limit] models are saved. Older ones are deleted.
     # save_steps = 1000,
-    eval_steps=99999999,  # 16281,    # Evaluation and Save happens every [eval_steps] steps
+    eval_steps=eval_steps,  # 16281,    # Evaluation and Save happens every [eval_steps] steps
     learning_rate=learning_rate,
+    lr_scheduler_type=lr_scheduler_type,
     num_train_epochs=num_train_epochs,  # total number of training epochs
     warmup_steps=warmup_steps,  # number of warmup steps for learning rate scheduler
     weight_decay=weight_decay,  # strength of weight decay
+    seed=random_seed,
+    dataloader_num_workers=num_workers,
 )
 
 
-trainer = CustomLossTrainer(
+trainer = CustomTrainer(
     tokenizer=tokenizer,
-    writer=writer,
-    step=step,
+    generation_config=generation_config,
     triplet_margin=triplet_margin,
     triplet_text_embedder=bert,
     triplet_text_tokenizer=bert_tokenizer,
-    max_text_embedding_length=max_caption_len,
+    max_text_embedding_length=generation_config.max_length,
     loss_type=loss_type,
     compute_metrics=compute_metrics,
-    generation_function=generate_caption,
-    data_collator=None,
+    # generation_function=generate_caption,
+    # data_collator=None,
     model=model,  # the instantiated 🤗 Transformers model to be trained
     args=training_args,  # training arguments, defined above
     train_dataset=data_train,  # training dataset
@@ -295,4 +314,5 @@ trainer = CustomLossTrainer(
 
 trainer.train(checkpoint)
 # trainer.train()
-writer.flush()
+# writer.flush()
+
