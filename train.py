@@ -1,5 +1,4 @@
 import random
-import numpy as np
 import torch
 from tqdm import tqdm
 from datasets import load_metric
@@ -7,7 +6,6 @@ from transformers import (
     AutoModel,
     AutoTokenizer,
     PreTrainedTokenizer,
-    PretrainedConfig,
     SchedulerType,
     ViTFeatureExtractor,
     VisionEncoderDecoderModel,
@@ -17,16 +15,20 @@ from modules.custom_trainer import CustomTrainer
 from modules.dataset import FashionGenTorchDataset, NegativeSampleType
 from modules.fashiongen_utils import FashionGenDataset, DEFAULT_STRINGS_ENCODING
 from dataclasses import fields
+from modules.metrics import compute_metrics
 from modules.train_utils import GenerationConfig, ModelComponents
 from transformers.utils import logging
 import os
+from functools import partial
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 logger = logging.get_logger(__name__)
 
+# TODO: Handle configurations with other libraries (e.g., abseil, sacred) so that some parameters can be set from
+# command line
+### CONFIGURATIONS ###
 
-# MAIN PATHS
 random_seed = 42
 random.seed(random_seed)
 torch.manual_seed(random_seed)
@@ -35,6 +37,8 @@ data_path = "/home/salvatori/datasets/FashionGen/"
 fashiongen_train_file = "fashiongen_train.h5"
 fashiongen_validation_file = "fashiongen_validation.h5"
 checkpoints_path = "./checkpoints/"  # drive_path + 'checkpoints/'
+train_dataset_size = -1  # set -1 to use whole dataset
+validation_dataset_size = -1  # set -1 to use whole dataset
 
 # TRAIN CONFIG
 loss_type = "entropy"
@@ -51,9 +55,9 @@ logging_steps = 25
 eval_steps = 10000
 lr_scheduler_type = SchedulerType.COSINE
 learning_rate = 2e-5
-num_train_epochs = 5
 warmup_steps = 500
 weight_decay = 0.01
+num_train_epochs = 5
 
 predict_with_generate = True
 
@@ -78,12 +82,13 @@ negative_sample_type = NegativeSampleType.RANDOM  # NegativeSampleType.SAME_SUBC
 
 logger.info(f"Available devices= {torch.cuda.device_count()}")
 
-# ### Tensorboard Monitoring
+# Tensorboard Monitoring
 experiment_name = "entropy"
 log_path = os.path.join("tensorboard", experiment_name)
-# log_path = os.path.join(tensorboard_path, experiment_name)
-# writer = SummaryWriter(log_dir=log_path)
 
+# Evaluation metrics
+validation_metrics = ["sacrebleu", "meteor", "rouge", "bertscore"]  # bertscore
+validation_metrics = {v: load_metric(v) for v in validation_metrics}
 
 # component configurations
 vit_bert = ModelComponents(
@@ -211,45 +216,6 @@ def init_model_and_data(
         return model, component_config.tokenizer
 
 
-# ## Evaluation metrics
-bleu_metric = load_metric("sacrebleu")
-meteor_metric = load_metric("meteor")
-rouge_metric = load_metric("rouge")
-bertscore_metric = load_metric("bertscore")
-
-
-def compute_metrics(eval_preds, decode: bool = True):
-    preds, labels = eval_preds
-    if isinstance(preds, tuple):
-        preds = preds[0]
-    if decode:
-        preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        # Replace -100 in the labels as we can't decode them.
-        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-    # meteor
-    meteor = meteor_metric.compute(predictions=preds, references=labels)
-    # rougeL
-    rouge = rouge_metric.compute(predictions=preds, references=labels)
-    # bertscore
-    bertscore = bertscore_metric.compute(predictions=preds, references=labels, lang="en")
-    # split into list of tokens and remove spaces
-    preds = [pred.split(" ") for pred in preds]
-    labels = [[label.split(" ")] for label in labels]
-    # bleu
-    bleu = bleu_metric.compute(predictions=preds, references=labels)
-    result = {
-        "bleu": bleu["score"],
-        "meteor": meteor["meteor"] * 100,
-        "rougeL": rouge["rougeL"][1][2] * 100,
-        "bertscore": bertscore,
-    }
-    # prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-    # result["gen_len"] = np.mean(prediction_lens)
-    # result = {k: round(v, 4) for k, v in result.items()}
-    return result
-
-
 # ## Triplet-Loss Test
 # ### Model and Data setup
 model, tokenizer, data_train, data_val = init_model_and_data(
@@ -257,8 +223,8 @@ model, tokenizer, data_train, data_val = init_model_and_data(
     dataset_train_path=os.path.join(data_path, fashiongen_train_file),
     dataset_validation_path=os.path.join(data_path, fashiongen_validation_file),
     checkpoint=checkpoint,
-    n_train=-1,
-    n_val=-1,  # -1
+    n_train=train_dataset_size,
+    n_val=validation_dataset_size,
     negative_sample_type=negative_sample_type,
 )
 if loss_type == "triplet":
@@ -296,7 +262,6 @@ training_args = Seq2SeqTrainingArguments(
     dataloader_num_workers=num_workers,
 )
 
-
 trainer = CustomTrainer(
     tokenizer=tokenizer,
     generation_config=generation_config,
@@ -305,9 +270,7 @@ trainer = CustomTrainer(
     triplet_text_tokenizer=bert_tokenizer,
     max_text_embedding_length=generation_config.max_length,
     loss_type=loss_type,
-    compute_metrics=compute_metrics,
-    # generation_function=generate_caption,
-    # data_collator=None,
+    compute_metrics=partial(compute_metrics, validation_metrics=validation_metrics, tokenizer=tokenizer),
     model=model,  # the instantiated 🤗 Transformers model to be trained
     args=training_args,  # training arguments, defined above
     train_dataset=data_train,  # training dataset

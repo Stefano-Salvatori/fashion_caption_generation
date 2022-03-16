@@ -1,6 +1,6 @@
 checkpoints
 best
-modules/__pycache__
+**/__pycache__
 predictions/
 predictions_bk/
 tensorboard
