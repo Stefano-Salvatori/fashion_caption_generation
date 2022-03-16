@@ -47,7 +47,8 @@ num_workers = 4
 checkpoint = None  # checkpoints_path + loss_type + "-checkpoint-" + str(step)
 
 save_total_limit = 3
-eval_steps = 25000
+logging_steps = 25
+eval_steps = 10000
 lr_scheduler_type = SchedulerType.COSINE
 learning_rate = 2e-5
 num_train_epochs = 5
@@ -257,7 +258,7 @@ model, tokenizer, data_train, data_val = init_model_and_data(
     dataset_validation_path=os.path.join(data_path, fashiongen_validation_file),
     checkpoint=checkpoint,
     n_train=-1,
-    n_val=-1,
+    n_val=-1,  # -1
     negative_sample_type=negative_sample_type,
 )
 if loss_type == "triplet":
@@ -275,11 +276,12 @@ training_args = Seq2SeqTrainingArguments(
     per_device_eval_batch_size=eval_batch_size,  # batch size for evaluation
     output_dir=checkpoints_path,  # output directory,
     logging_dir=log_path,
+    logging_steps=logging_steps,
     run_name=experiment_name,
     load_best_model_at_end=False,
     predict_with_generate=predict_with_generate,
     generation_num_beams=generation_config.num_beams,
-    #eval_accumulation_steps=2,  # send logits and labels to cpu for evaluation step by step, rather than all together
+    # eval_accumulation_steps=2,  # send logits and labels to cpu for evaluation step by step, rather than all together
     evaluation_strategy="steps",
     save_strategy="epoch",
     save_total_limit=save_total_limit,  # Only last [save_total_limit] models are saved. Older ones are deleted.
