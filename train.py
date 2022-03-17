@@ -15,7 +15,7 @@ from modules.custom_trainer import CustomTrainer
 from modules.dataset import FashionGenTorchDataset, NegativeSampleType
 from modules.fashiongen_utils import FashionGenDataset, DEFAULT_STRINGS_ENCODING
 from dataclasses import fields
-from modules.metrics import compute_metrics
+from modules.metrics.metrics_utils import compute_metrics
 from modules.train_utils import GenerationConfig, ModelComponents
 from transformers.utils import logging
 import os
@@ -55,7 +55,7 @@ logging_steps = 25
 eval_steps = 10000
 lr_scheduler_type = SchedulerType.COSINE
 learning_rate = 2e-5
-warmup_steps = 500
+warmup_steps = 1000
 weight_decay = 0.01
 num_train_epochs = 5
 
@@ -87,8 +87,8 @@ experiment_name = "entropy"
 log_path = os.path.join("tensorboard", experiment_name)
 
 # Evaluation metrics
-validation_metrics = ["sacrebleu", "meteor", "rouge", "bertscore"]  # bertscore
-validation_metrics = {v: load_metric(v) for v in validation_metrics}
+validation_metrics = ["sacrebleu", "meteor", "rouge", "modules/metrics/eng_bertscore.py"] 
+validation_metrics = [load_metric(v) for v in validation_metrics]
 
 # component configurations
 vit_bert = ModelComponents(
@@ -161,7 +161,6 @@ def init_model_and_data(
     n_train: int = -1,
     n_val: int = -1,
     checkpoint: str = None,
-    init_data: bool = True,
     negative_sample_type: NegativeSampleType = NegativeSampleType.RANDOM,
 ):
     logger.info("Initializing model")
@@ -201,19 +200,16 @@ def init_model_and_data(
         setattr(model.config.decoder, field.name, getattr(component_config.generation_config, field.name))
 
     # load and prepare data
-    if init_data:
-        data_train, data_val = load_data(
-            dataset_train_path=dataset_train_path,
-            dataset_validation_path=dataset_validation_path,
-            tokenizer=component_config.tokenizer,
-            img_processor=component_config.img_processor,
-            n_train=n_train,
-            n_val=n_val,
-            negative_sample_type=negative_sample_type,
-        )
-        return model, component_config.tokenizer, data_train, data_val
-    else:
-        return model, component_config.tokenizer
+    data_train, data_val = load_data(
+        dataset_train_path=dataset_train_path,
+        dataset_validation_path=dataset_validation_path,
+        tokenizer=component_config.tokenizer,
+        img_processor=component_config.img_processor,
+        n_train=n_train,
+        n_val=n_val,
+        negative_sample_type=negative_sample_type,
+    )
+    return model, component_config.tokenizer, data_train, data_val
 
 
 # ## Triplet-Loss Test
@@ -277,7 +273,7 @@ trainer = CustomTrainer(
     eval_dataset=data_val,  # evaluation dataset
 )
 
-trainer.train(checkpoint)
+trainer.train(resume_from_checkpoint=checkpoint)
 # trainer.train()
 # writer.flush()
 
