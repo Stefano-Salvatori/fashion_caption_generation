@@ -1,25 +1,22 @@
 import random
 import torch
-from tqdm import tqdm
 from datasets import load_metric
 from transformers import (
     AutoModel,
     AutoTokenizer,
-    PreTrainedTokenizer,
     SchedulerType,
     ViTFeatureExtractor,
     VisionEncoderDecoderModel,
     Seq2SeqTrainingArguments,
 )
 from modules.custom_trainer import CustomTrainer
-from modules.dataset import FashionGenTorchDataset, NegativeSampleType
-from modules.fashiongen_utils import FashionGenDataset, DEFAULT_STRINGS_ENCODING
+from modules.data.dataset import FashionGenTorchDataset, NegativeSampleType
 from dataclasses import fields
 from modules.metrics.metrics_utils import compute_metrics
 from modules.train_utils import GenerationConfig, ModelComponents
 from transformers.utils import logging
-import os
 from functools import partial
+import os
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -36,33 +33,34 @@ torch.manual_seed(random_seed)
 data_path = "/home/salvatori/datasets/FashionGen/"
 fashiongen_train_file = "fashiongen_train.h5"
 fashiongen_validation_file = "fashiongen_validation.h5"
-checkpoints_path = "./checkpoints/"  # drive_path + 'checkpoints/'
 train_dataset_size = -1  # set -1 to use whole dataset
 validation_dataset_size = -1  # set -1 to use whole dataset
 
 # TRAIN CONFIG
 loss_type = "entropy"
 step = 0
-train_batch_size = 12
-eval_batch_size = 64
+train_batch_size = 32
+eval_batch_size = 128
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_workers = 4
 
 checkpoint = None  # checkpoints_path + loss_type + "-checkpoint-" + str(step)
 
 save_total_limit = 3
+save_steps = 1000
 logging_steps = 25
-eval_steps = 10000
+eval_steps = 5000
 lr_scheduler_type = SchedulerType.COSINE
 learning_rate = 2e-5
-warmup_steps = 1000
+warmup_steps = 500
 weight_decay = 0.01
-num_train_epochs = 5
+num_train_epochs = 10
 
 predict_with_generate = True
 
+max_captions_length = 128
 generation_config = GenerationConfig(
-    max_length=128,
+    max_length=max_captions_length,
     min_length=0,
     do_sample=False,
     num_beams=1,
@@ -83,11 +81,13 @@ negative_sample_type = NegativeSampleType.RANDOM  # NegativeSampleType.SAME_SUBC
 logger.info(f"Available devices= {torch.cuda.device_count()}")
 
 # Tensorboard Monitoring
-experiment_name = "entropy"
+experiment_name = "entropy_10epoch"
 log_path = os.path.join("tensorboard", experiment_name)
+checkpoints_path = os.path.join("checkpoints", experiment_name)  # drive_path + 'checkpoints/'
+
 
 # Evaluation metrics
-validation_metrics = ["sacrebleu", "meteor", "rouge", "modules/metrics/eng_bertscore.py"] 
+validation_metrics = ["sacrebleu", "meteor", "rouge"]  # , "modules/metrics/eng_bertscore.py"]
 validation_metrics = [load_metric(v) for v in validation_metrics]
 
 # component configurations
@@ -106,54 +106,6 @@ vit_gpt2 = ModelComponents(
 )
 
 
-# # Model and Data setup
-# ## Model and Dataset init
-def load_data(
-    dataset_train_path: str,
-    dataset_validation_path: str,
-    tokenizer: PreTrainedTokenizer,
-    img_processor,
-    n_train,
-    n_val,
-    negative_sample_type: NegativeSampleType,
-):
-    logger.info("Encoding captions")
-    cap_train = list()
-    for p in tqdm(FashionGenDataset(dataset_train_path).raw_h5()["input_description"]):
-        cap_train.append(p[0].decode(DEFAULT_STRINGS_ENCODING).replace("<br>", " "))
-    cap_val = list()
-    for p in tqdm(FashionGenDataset(dataset_validation_path).raw_h5()["input_description"]):
-        cap_val.append(p[0].decode(DEFAULT_STRINGS_ENCODING).replace("<br>", " "))
-
-    # tokenizer.padding_side = "left"  # TODO: why?
-    if not tokenizer.pad_token:
-        # we can use the  EOS token as PAD token if the tokenizer doesn't have one
-        # (https://huggingface.co/docs/transformers/master/model_doc/vision-encoder-decoder#:~:text=model.config.pad_token_id%20%3D%20model.config.eos_token_id)
-        tokenizer.pad_token = tokenizer.eos_token
-
-    cap_train = tokenizer.batch_encode_plus(cap_train, return_tensors="pt", padding=True)
-    cap_val = tokenizer.batch_encode_plus(cap_val, return_tensors="pt", padding=True)
-
-    logger.info("Creating torch train/validation datasets")
-    data_train = FashionGenTorchDataset(
-        dataset_train_path,
-        cap_train,
-        img_processor,
-        n_samples=n_train,
-        device=device,
-        negative_sample_type=negative_sample_type,
-    )
-    data_val = FashionGenTorchDataset(
-        dataset_validation_path,
-        cap_val,
-        img_processor,
-        n_samples=n_val,
-        device=device,
-        negative_sample_type=negative_sample_type,
-    )
-    return data_train, data_val
-
-
 def init_model_and_data(
     component_config: ModelComponents,
     dataset_train_path: str,
@@ -161,9 +113,9 @@ def init_model_and_data(
     n_train: int = -1,
     n_val: int = -1,
     checkpoint: str = None,
+    max_captions_length: int = 256,
     negative_sample_type: NegativeSampleType = NegativeSampleType.RANDOM,
 ):
-    logger.info("Initializing model")
     # load models and their configs from pretrained checkpoints
     if checkpoint is None:
         model: VisionEncoderDecoderModel = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
@@ -171,48 +123,47 @@ def init_model_and_data(
         )
     else:
         model: VisionEncoderDecoderModel = VisionEncoderDecoderModel.from_pretrained(checkpoint)
-    # Should be automatically set by previous methods
-    # set decoder config to causal lm
-    # model.config.decoder_is_decoder = True
-    # model.config.decoder_add_cross_attention = True
-
-    model.config.decoder_start_token_id = component_config.tokenizer.bos_token_id
-    model.config.decoder_bos_token_id = component_config.tokenizer.bos_token_id
-    model.config.decoder_eos_token_id = component_config.tokenizer.eos_token_id
-
+    model.config.decoder_is_decoder = True
+    model.config.decoder_add_cross_attention = True
+    model.config.decoder_start_token_id = (
+        component_config.tokenizer.bos_token_id
+        if component_config.tokenizer.bos_token_id is not None
+        else component_config.tokenizer.cls_token_id
+    )
     # we can use the  EOS token as PAD token if the tokenizer doesn't have one
     # (https://huggingface.co/docs/transformers/master/model_doc/vision-encoder-decoder#:~:text=model.config.pad_token_id%20%3D%20model.config.eos_token_id)
+
     model.config.pad_token_id = (
-        component_config.tokenizer.eos_token_id
-        if not component_config.tokenizer.pad_token_id
-        else component_config.tokenizer.pad_token_id
+        component_config.tokenizer.pad_token_id
+        if component_config.tokenizer.pad_token_id is not None
+        else component_config.tokenizer.eos_token_id
     )
-
-    model.config.decoder_start_token_id = component_config.tokenizer.bos_token_id
-    model.config.decoder.eos_token_id = component_config.tokenizer.eos_token_id
-    # component_config.tokenizer.pad_token = component_config.tokenizer.eos_token
-
-    # model.decoder.config.pad_token_id = component_config.tokenizer.pad_token_id
-    # model.config.encoder.pad_token_id = component_config.tokenizer.pad_token_id
-
+    model.config.decoder_bos_token_id = model.config.decoder_start_token_id
+    model.config.decoder_eos_token_id = component_config.tokenizer.eos_token_id
+    
     # set generation arguments
     for field in fields(component_config.generation_config):
         setattr(model.config.decoder, field.name, getattr(component_config.generation_config, field.name))
 
-    # load and prepare data
-    data_train, data_val = load_data(
-        dataset_train_path=dataset_train_path,
-        dataset_validation_path=dataset_validation_path,
-        tokenizer=component_config.tokenizer,
+    # create torch dataset
+    data_train = FashionGenTorchDataset(
+        file_name=dataset_train_path,
+        text_tokenizer=component_config.tokenizer,
         img_processor=component_config.img_processor,
-        n_train=n_train,
-        n_val=n_val,
+        n_samples=n_train,
+        max_text_length=max_captions_length,
+        negative_sample_type=negative_sample_type,
+    )
+    data_val = FashionGenTorchDataset(
+        file_name=dataset_validation_path,
+        text_tokenizer=component_config.tokenizer,
+        img_processor=component_config.img_processor,
+        n_samples=n_val,
+        max_text_length=max_captions_length,
         negative_sample_type=negative_sample_type,
     )
     return model, component_config.tokenizer, data_train, data_val
 
-
-# ## Triplet-Loss Test
 # ### Model and Data setup
 model, tokenizer, data_train, data_val = init_model_and_data(
     component_config=vit_gpt2,
@@ -221,6 +172,7 @@ model, tokenizer, data_train, data_val = init_model_and_data(
     checkpoint=checkpoint,
     n_train=train_dataset_size,
     n_val=validation_dataset_size,
+    max_captions_length=max_captions_length,
     negative_sample_type=negative_sample_type,
 )
 if loss_type == "triplet":
@@ -247,7 +199,7 @@ training_args = Seq2SeqTrainingArguments(
     evaluation_strategy="steps",
     save_strategy="epoch",
     save_total_limit=save_total_limit,  # Only last [save_total_limit] models are saved. Older ones are deleted.
-    # save_steps = 1000,
+    save_steps=save_steps,
     eval_steps=eval_steps,  # 16281,    # Evaluation and Save happens every [eval_steps] steps
     learning_rate=learning_rate,
     lr_scheduler_type=lr_scheduler_type,

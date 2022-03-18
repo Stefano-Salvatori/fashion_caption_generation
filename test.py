@@ -13,8 +13,8 @@ from transformers import (
     ViTFeatureExtractor,
     VisionEncoderDecoderModel,
 )
-from modules.dataset import FashionGenTorchDataset
-from modules.fashiongen_utils import DEFAULT_STRINGS_ENCODING, FashionGenDataset
+from modules.data.dataset import FashionGenTorchDataset
+from modules.data.fashiongen_utils import DEFAULT_STRINGS_ENCODING, FashionGenDataset
 from typing import Literal
 import os
 

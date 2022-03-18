@@ -43,7 +43,7 @@ class CustomTrainer(Seq2SeqTrainer):
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
         Subclass and override for custom behavior.
         """
-        negative = inputs.pop("negative")
+        negative = inputs.pop("negative_pixel_values")
         if self.label_smoother is not None and "labels" in inputs:
             labels = inputs.pop("labels")
         else:
@@ -81,7 +81,7 @@ class CustomTrainer(Seq2SeqTrainer):
         model: nn.Module,
         inputs: Dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = ["negative"],
+        ignore_keys: Optional[List[str]] = ["negative_pixel_values"],
     ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Perform an evaluation step on :obj:`model` using obj:`inputs`.
@@ -143,7 +143,7 @@ class CustomTrainer(Seq2SeqTrainer):
             generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
 
         input_copy = inputs.copy()
-        input_copy.pop("negative")
+        input_copy.pop("negative_pixel_values")
         with torch.no_grad():
             if self.use_amp:
                 with autocast():

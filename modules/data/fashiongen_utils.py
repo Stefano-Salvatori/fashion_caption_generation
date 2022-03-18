@@ -1,7 +1,6 @@
 # @title Utility classes execute
 from typing import List
 import random
-import torch
 from tqdm import tqdm
 import h5py
 from dataclasses import dataclass

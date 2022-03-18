@@ -18,6 +18,11 @@ class ModelComponents:
         self.generation_config = generation_config
         self.img_processor = img_processor.from_pretrained(self.encoder_checkpoint)
         self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(decoder_checkpoint)
+        # tokenizer.padding_side = "left"  # TODO: why?
+        if not self.tokenizer.pad_token:
+            # we can use the  EOS token as PAD token if the tokenizer doesn't have one
+            # (https://huggingface.co/docs/transformers/master/model_doc/vision-encoder-decoder#:~:text=model.config.pad_token_id%20%3D%20model.config.eos_token_id)
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
 
 @dataclass
@@ -34,8 +39,7 @@ class GenerationConfig:
     length_penalty: float = 1.0
     no_repeat_ngram_size: int = 0
     bad_words_ids: List[int] = None
-
-
+    
 def generate_caption(
     model,
     tokenizer,
