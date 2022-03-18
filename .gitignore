@@ -4,3 +4,4 @@ predictions
 predictions_bk
 tensorboard
 **/__pycache__
+misc_test.py
