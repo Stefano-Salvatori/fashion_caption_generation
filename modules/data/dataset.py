@@ -19,7 +19,7 @@ class FashionGenTorchDataset(torch.utils.data.Dataset):
         img_processor,
         n_samples: int,
         max_text_length: int = 256,
-        negative_sample_type: NegativeSampleType = NegativeSampleType.SAME_SUBCATEGORY,
+        negative_sample_type: NegativeSampleType = NegativeSampleType.RANDOM,
     ):
         self.n_samples = n_samples
         self.file_path = file_name

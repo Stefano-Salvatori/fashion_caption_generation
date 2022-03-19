@@ -7,6 +7,8 @@ from transformers import Seq2SeqTrainer
 from transformers.integrations import TensorBoardCallback
 from transformers.utils import logging
 from modules.train_utils import GenerationConfig, triplet_margin_loss
+from transformers.deepspeed import is_deepspeed_zero3_enabled
+
 
 
 if version.parse(torch.__version__) >= version.parse("1.6"):
@@ -121,17 +123,11 @@ class CustomTrainer(Seq2SeqTrainer):
 
         # XXX: adapt synced_gpus for fairscale as well
         gen_kwargs = dataclasses.asdict(self.generation_config)
-        # {
-        #     "max_length": self._max_length if self._max_length is not None else self.model.config.decoder.max_length,
-        #     "num_beams": self._num_beams if self._num_beams is not None else self.model.config.decoder.num_beams,
-        #     "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
-        #     "repetition_penalty": self.model.config.decoder.repetition_penalty,
-        #     "no_repeat_ngram_size": self.model.config.decoder.no_repeat_ngram_size,
-        #     "decoder_start_token_id": self.model.config.decoder_start_token_id,
-        #     "eos_token_id": self.model.config.decoder.eos_token_id,
-        #     "do_sample": self.model.config.decoder.do_sample,
-        #     "max_length": self.model.config.decoder.max_length,
-        # }
+        gen_kwargs = gen_kwargs | {
+            "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
+            "decoder_start_token_id": self.model.config.decoder_start_token_id,
+            "eos_token_id": self.model.config.decoder.eos_token_id,
+        }
 
         if "attention_mask" in inputs:
             gen_kwargs["attention_mask"] = inputs.get("attention_mask", None)
@@ -176,21 +172,3 @@ class CustomTrainer(Seq2SeqTrainer):
             labels = None
 
         return (loss, generated_tokens, labels)
-
-    def _pad_tensors_to_max_len(self, tensor, max_length):
-        if self.tokenizer is not None and hasattr(self.tokenizer, "pad_token_id"):
-            # If PAD token is not defined at least EOS token has to be defined
-            pad_token_id = (
-                self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
-            )
-        else:
-            if self.model.config.pad_token_id is not None:
-                pad_token_id = self.model.config.pad_token_id
-            else:
-                raise ValueError("Pad_token_id must be set in the configuration of the model, in order to pad tensors")
-
-        padded_tensor = pad_token_id * torch.ones(
-            (tensor.shape[0], max_length), dtype=tensor.dtype, device=tensor.device
-        )
-        padded_tensor[:, : tensor.shape[-1]] = tensor
-        return padded_tensor

@@ -1,7 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import List
 import torch
-from transformers import AutoTokenizer, PreTrainedTokenizer, PretrainedConfig
+from transformers import AutoTokenizer, PreTrainedTokenizer, PretrainedConfig, VisionEncoderDecoderModel
 from transformers.feature_extraction_utils import FeatureExtractionMixin
 
 
@@ -35,11 +35,49 @@ class GenerationConfig:
     top_k: int = 50
     top_p: float = 1.0
     diversity_penalty: float = 0.0
-    repetition_penalty: float = 10.0
+    repetition_penalty: float = 1.0
     length_penalty: float = 1.0
     no_repeat_ngram_size: int = 0
     bad_words_ids: List[int] = None
+
+
+def init_model(components_config: ModelComponents, checkpoint: str = None) -> VisionEncoderDecoderModel:
+    """
+    Initialize Vision Encoder-Decoder Model
+    """
+    # load models and their configs from pretrained checkpoints
+    if checkpoint is None:
+        model: VisionEncoderDecoderModel = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(
+            components_config.encoder_checkpoint, components_config.decoder_checkpoint
+        )
+    else:
+        model: VisionEncoderDecoderModel = VisionEncoderDecoderModel.from_pretrained(checkpoint)
+
+    model.config.decoder_is_decoder = True
+    model.config.decoder_add_cross_attention = True
+    model.config.decoder_start_token_id = (
+        components_config.tokenizer.bos_token_id
+        if components_config.tokenizer.bos_token_id is not None
+        else components_config.tokenizer.cls_token_id
+    )
+
+    # we can use the  EOS token as PAD token if the tokenizer doesn't have one
+    # (https://huggingface.co/docs/transformers/master/model_doc/vision-encoder-decoder#:~:text=model.config.pad_token_id%20%3D%20model.config.eos_token_id)
+    model.config.pad_token_id = (
+        components_config.tokenizer.pad_token_id
+        if components_config.tokenizer.pad_token_id is not None
+        else components_config.tokenizer.eos_token_id
+    )
+    model.config.decoder_bos_token_id = model.config.decoder_start_token_id
+    model.config.decoder_eos_token_id = components_config.tokenizer.eos_token_id
+
+    # set generation arguments
+    for field in fields(components_config.generation_config):
+        setattr(model.config.decoder, field.name, getattr(components_config.generation_config, field.name))
     
+    return model
+
+
 def generate_caption(
     model,
     tokenizer,
