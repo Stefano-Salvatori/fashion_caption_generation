@@ -4,6 +4,7 @@ import torch
 from packaging import version
 from torch import nn
 from transformers import Seq2SeqTrainer
+from transformers.integrations import TensorBoardCallback
 from transformers.utils import logging
 from modules.train_utils import GenerationConfig, triplet_margin_loss
 
@@ -37,6 +38,12 @@ class CustomTrainer(Seq2SeqTrainer):
         self.tokenizer = tokenizer
         # self.generation_function = generation_function if generation_function else self.model.generate
         self.generation_config = generation_config
+
+        # move Tensorboard Callback to last position so it can log all log items added in other callbacks
+        for i, cb in enumerate(self.callback_handler.callbacks):
+            if isinstance(cb, TensorBoardCallback):
+                break
+        self.callback_handler.callbacks.append(self.callback_handler.callbacks.pop(i))
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """

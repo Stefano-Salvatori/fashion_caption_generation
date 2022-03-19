@@ -4,11 +4,13 @@ from datasets import load_metric
 from transformers import (
     AutoModel,
     AutoTokenizer,
+    EarlyStoppingCallback,
     SchedulerType,
     ViTFeatureExtractor,
     VisionEncoderDecoderModel,
     Seq2SeqTrainingArguments,
 )
+from modules.callbacks import GPUStatsMonitor
 from modules.custom_trainer import CustomTrainer
 from modules.data.dataset import FashionGenTorchDataset, NegativeSampleType
 from dataclasses import fields
@@ -17,6 +19,7 @@ from modules.train_utils import GenerationConfig, ModelComponents
 from transformers.utils import logging
 from functools import partial
 import os
+import time
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -42,14 +45,14 @@ step = 0
 train_batch_size = 32
 eval_batch_size = 128
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-num_workers = 4
+num_workers = 3
 
 checkpoint = None  # checkpoints_path + loss_type + "-checkpoint-" + str(step)
 
-save_total_limit = 3
-save_steps = 1000
+save_total_limit = 5
+patience = 4
+save_steps = 500
 logging_steps = 25
-eval_steps = 5000
 lr_scheduler_type = SchedulerType.COSINE
 learning_rate = 2e-5
 warmup_steps = 500
@@ -68,7 +71,7 @@ generation_config = GenerationConfig(
     top_k=50,
     top_p=1.0,
     diversity_penalty=0.0,
-    repetition_penalty=10.0,
+    repetition_penalty=5.0,
     length_penalty=1.0,
     no_repeat_ngram_size=0,
     bad_words_ids=None,
@@ -78,10 +81,9 @@ triplet_margin = 0.1
 pretrained_text_embedder = "bert-base-uncased"
 negative_sample_type = NegativeSampleType.RANDOM  # NegativeSampleType.SAME_SUBCATEGORY
 
-logger.info(f"Available devices= {torch.cuda.device_count()}")
-
 # Tensorboard Monitoring
 experiment_name = "entropy_10epoch"
+experiment_name = f"{experiment_name}_{time.strftime('%d%m%H%M')}"
 log_path = os.path.join("tensorboard", experiment_name)
 checkpoints_path = os.path.join("checkpoints", experiment_name)  # drive_path + 'checkpoints/'
 
@@ -130,9 +132,9 @@ def init_model_and_data(
         if component_config.tokenizer.bos_token_id is not None
         else component_config.tokenizer.cls_token_id
     )
+
     # we can use the  EOS token as PAD token if the tokenizer doesn't have one
     # (https://huggingface.co/docs/transformers/master/model_doc/vision-encoder-decoder#:~:text=model.config.pad_token_id%20%3D%20model.config.eos_token_id)
-
     model.config.pad_token_id = (
         component_config.tokenizer.pad_token_id
         if component_config.tokenizer.pad_token_id is not None
@@ -140,7 +142,7 @@ def init_model_and_data(
     )
     model.config.decoder_bos_token_id = model.config.decoder_start_token_id
     model.config.decoder_eos_token_id = component_config.tokenizer.eos_token_id
-    
+
     # set generation arguments
     for field in fields(component_config.generation_config):
         setattr(model.config.decoder, field.name, getattr(component_config.generation_config, field.name))
@@ -196,11 +198,10 @@ training_args = Seq2SeqTrainingArguments(
     predict_with_generate=predict_with_generate,
     generation_num_beams=generation_config.num_beams,
     # eval_accumulation_steps=2,  # send logits and labels to cpu for evaluation step by step, rather than all together
-    evaluation_strategy="steps",
-    save_strategy="epoch",
+    evaluation_strategy="epoch",
+    save_strategy="steps",
     save_total_limit=save_total_limit,  # Only last [save_total_limit] models are saved. Older ones are deleted.
     save_steps=save_steps,
-    eval_steps=eval_steps,  # 16281,    # Evaluation and Save happens every [eval_steps] steps
     learning_rate=learning_rate,
     lr_scheduler_type=lr_scheduler_type,
     num_train_epochs=num_train_epochs,  # total number of training epochs
@@ -224,6 +225,8 @@ trainer = CustomTrainer(
     train_dataset=data_train,  # training dataset
     eval_dataset=data_val,  # evaluation dataset
 )
+
+callbacks = [EarlyStoppingCallback(early_stopping_patience=patience), GPUStatsMonitor()]
 
 trainer.train(resume_from_checkpoint=checkpoint)
 # trainer.train()
