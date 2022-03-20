@@ -1,8 +1,14 @@
 from dataclasses import dataclass, fields
+from enum import Enum
 from typing import List
 import torch
 from transformers import AutoTokenizer, PreTrainedTokenizer, PretrainedConfig, VisionEncoderDecoderModel
 from transformers.feature_extraction_utils import FeatureExtractionMixin
+
+
+class LossType(Enum):
+    ENTROPY=0
+    ENTROPY_TRIPLET=1
 
 
 class ModelComponents:
@@ -31,6 +37,7 @@ class GenerationConfig:
     min_length: int = 0
     do_sample: bool = False
     num_beams: int = 3
+    early_stopping: bool = False
     temperature: float = 1.0
     top_k: int = 50
     top_p: float = 1.0

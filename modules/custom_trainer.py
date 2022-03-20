@@ -6,9 +6,8 @@ from torch import nn
 from transformers import Seq2SeqTrainer
 from transformers.integrations import TensorBoardCallback
 from transformers.utils import logging
-from modules.train_utils import GenerationConfig, triplet_margin_loss
+from modules.train_utils import GenerationConfig, LossType, triplet_margin_loss
 from transformers.deepspeed import is_deepspeed_zero3_enabled
-
 
 
 if version.parse(torch.__version__) >= version.parse("1.6"):
@@ -27,7 +26,7 @@ class CustomTrainer(Seq2SeqTrainer):
         triplet_text_embedder=None,
         triplet_text_tokenizer=None,
         max_text_embedding_length=64,
-        loss_type="entropy",
+        loss_type: LossType = LossType.ENTROPY,
         *args,
         **kwargs,
     ) -> None:
@@ -52,7 +51,7 @@ class CustomTrainer(Seq2SeqTrainer):
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
         Subclass and override for custom behavior.
         """
-        negative = inputs.pop("negative_pixel_values")
+        negative = inputs.pop("negative_pixel_values") if self.loss_type == LossType.ENTROPY_TRIPLET else None
         if self.label_smoother is not None and "labels" in inputs:
             labels = inputs.pop("labels")
         else:
@@ -67,8 +66,8 @@ class CustomTrainer(Seq2SeqTrainer):
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             entropy_loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
             # TODO: change log call
-            self.log({"entropy_loss": torch.mean(entropy_loss).item()})
-        if self.loss_type == "triplet":
+            # self.log({"entropy_loss": torch.mean(entropy_loss).item()})
+        if self.loss_type == LossType.ENTROPY_TRIPLET:
             triplet_loss = triplet_margin_loss(
                 model,
                 self.tokenizer,
@@ -146,7 +145,9 @@ class CustomTrainer(Seq2SeqTrainer):
             generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
 
         input_copy = inputs.copy()
-        input_copy.pop("negative_pixel_values")
+        if self.loss_type == LossType.ENTROPY_TRIPLET:
+            input_copy.pop("negative_pixel_values")
+
         with torch.no_grad():
             if self.use_amp:
                 with autocast():
