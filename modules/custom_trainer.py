@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 from packaging import version
 from torch import nn
-from transformers import Seq2SeqTrainer
+from transformers import Pipeline, PreTrainedTokenizer, Seq2SeqTrainer, pipeline
 from transformers.integrations import TensorBoardCallback
 from transformers.utils import logging
-from modules.train_utils import GenerationConfig, LossType, triplet_margin_loss
+from modules.train_utils import GenerationConfig, LossType
 from transformers.deepspeed import is_deepspeed_zero3_enabled
 
 
@@ -20,25 +20,22 @@ logger = logging.get_logger(__name__)
 class CustomTrainer(Seq2SeqTrainer):
     def __init__(
         self,
-        tokenizer,
+        tokenizer: PreTrainedTokenizer,
         generation_config: GenerationConfig,
-        triplet_margin=0.1,
-        triplet_text_embedder=None,
-        triplet_text_tokenizer=None,
-        max_text_embedding_length=64,
+        triplet_margin: float = 0.1,
+        triplet_text_embedder: str = None,
         loss_type: LossType = LossType.ENTROPY,
         *args,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.triplet_margin = triplet_margin
-        self.triplet_text_embedder = triplet_text_embedder
-        self.triplet_text_tokenizer = triplet_text_tokenizer
-        self.max_text_embedding_length = max_text_embedding_length
         self.loss_type = loss_type
         self.tokenizer = tokenizer
         # self.generation_function = generation_function if generation_function else self.model.generate
         self.generation_config = generation_config
+
+        self.text_feature_extractor = self._pipeline_from_embedder(triplet_text_embedder, self.model.device.index)
 
         # move Tensorboard Callback to last position so it can log all log items added in other callbacks
         for i, cb in enumerate(self.callback_handler.callbacks):
@@ -68,18 +65,33 @@ class CustomTrainer(Seq2SeqTrainer):
             # TODO: change log call
             # self.log({"entropy_loss": torch.mean(entropy_loss).item()})
         if self.loss_type == LossType.ENTROPY_TRIPLET:
-            triplet_loss = triplet_margin_loss(
-                model,
-                self.tokenizer,
-                self.triplet_text_embedder,
-                self.triplet_text_tokenizer,
+            positive_img_embedding = model.encoder(pixel_values=inputs["pixel_values"])["pooler_output"]
+            negative_img_embedding = model.encoder(pixel_values=negative)["pooler_output"]
+            caption = model.generate(
                 inputs["pixel_values"],
-                negative,
-                max_text_embedding_len=self.max_text_embedding_length,
+                decoder_start_token_id=self.tokenizer.bos_token_id,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+                early_stopping=True
+            )
+            caption = self.tokenizer.batch_decode(caption, skip_special_tokens=True)
+            # TODO: probably it is better to create a custom pipeline that returns tensors instead of lists
+            caption_embedding = torch.tensor(
+                self.text_feature_extractor(caption, batch_size=len(caption)), device=self.model.device
+            )
+            # Take CLS embedding for each generated caption
+            caption_embedding = caption_embedding[:, 0, 0, :]
+            triplet_loss = torch.nn.functional.triplet_margin_loss(
+                anchor=torch.nn.functional.normalize(caption_embedding, dim=1),
+                positive=torch.nn.functional.normalize(positive_img_embedding, dim=1),
+                negative=torch.nn.functional.normalize(negative_img_embedding, dim=1),
                 margin=self.triplet_margin,
+                swap=True,
             )
             final_loss = entropy_loss + triplet_loss
-            self.log({"triplet_loss": torch.mean(triplet_loss).item()})
+            self.log(
+                {"triplet_loss": torch.mean(triplet_loss).item(), "entropy_loss": torch.mean(entropy_loss).item()}
+            )
         else:
             final_loss = entropy_loss
         return (final_loss, outputs) if return_outputs else final_loss
@@ -173,3 +185,6 @@ class CustomTrainer(Seq2SeqTrainer):
             labels = None
 
         return (loss, generated_tokens, labels)
+
+    def _pipeline_from_embedder(self, embedder_weights: str, device_idx: int = -1) -> Pipeline:
+        return pipeline("feature-extraction", model=embedder_weights, device=device_idx)

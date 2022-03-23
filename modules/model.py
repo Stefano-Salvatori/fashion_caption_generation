@@ -15,6 +15,7 @@
 """ Classes to support Vision-Encoder-Text-Decoder architectures"""
 
 
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
@@ -49,7 +50,13 @@ def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start
 logger = logging.get_logger(__name__)
 
 
-class VisionEncoderDecoderModelWithTriplet(VisionEncoderDecoderModel):
+@dataclass
+class Seq2SeqLMOutputWithContrastive(Seq2SeqLMOutput):
+    entropy_loss: Optional[torch.FloatTensor] = None
+    contrastive_loss: Optional[torch.FloatTensor] = None
+
+
+class VisionEncoderDecoderModelWithContrastive(VisionEncoderDecoderModel):
     def __init__(
         self,
         embedder_model_name_or_path: str,
@@ -93,14 +100,15 @@ class VisionEncoderDecoderModelWithTriplet(VisionEncoderDecoderModel):
         )
         encoder_attention_mask = None
 
-        negative_hidden_states, negative_encoder_outputs = self._encode_image(
-            negative_pixel_values,
-            negative_encoder_outputs,
-            output_attentions,
-            output_hidden_states,
-            return_dict,
-            kwargs_encoder,
-        )
+        if negative_pixel_values is not None:
+            negative_hidden_states, negative_encoder_outputs = self._encode_image(
+                negative_pixel_values,
+                negative_encoder_outputs,
+                output_attentions,
+                output_hidden_states,
+                return_dict,
+                kwargs_encoder,
+            )
 
         if (labels is not None) and (decoder_input_ids is None and decoder_inputs_embeds is None):
             decoder_input_ids = shift_tokens_right(
@@ -127,23 +135,29 @@ class VisionEncoderDecoderModelWithTriplet(VisionEncoderDecoderModel):
 
         # Compute loss independent from decoder (as some shift the logits inside them)
         loss = None
+        ce_loss = None
+        contrastive_loss = None
         if labels is not None:
             logits = decoder_outputs.logits if return_dict else decoder_outputs[0]
             # Cross entropy loss
             loss_fct = CrossEntropyLoss()
             ce_loss = loss_fct(logits.reshape(-1, self.decoder.config.vocab_size), labels.view(-1))
-            # Triplet loss
-            caption = self.decoder_tokenizer.batch_decode(torch.argmax(logits, dim=2))
+            
+            if negative_pixel_values:
+                # Triplet loss
+                caption = self.decoder_tokenizer.batch_decode(torch.argmax(logits, dim=2))
 
-            # TODO: probably it is better to create a custom pipeline that returns tensors instead of lists
-            caption_embedding = torch.tensor(self.text_feature_extractor(caption, batch_size=len(caption)), device=self.device)
-            # Take CLS embedding for each generated caption
-            caption_embedding = caption_embedding[:,0,0,:]
-            # TODO: add margin hyperparameter
-            triplet_loss = TripletMarginLoss()
-            triplet_loss = triplet_loss(caption_embedding, positive_image_embeddings, negative_image_embeddings)
+                # TODO: probably it is better to create a custom pipeline that returns tensors instead of lists
+                caption_embedding = torch.tensor(
+                    self.text_feature_extractor(caption, batch_size=len(caption)), device=self.device
+                )
+                # Take CLS embedding for each generated caption
+                caption_embedding = caption_embedding[:, 0, 0, :]
+                # TODO: add margin hyperparameter
+                contrastive_loss = TripletMarginLoss()
+                contrastive_loss = contrastive_loss(caption_embedding, positive_image_embeddings, negative_image_embeddings)
 
-            loss = ce_loss + triplet_loss
+            loss = ce_loss + contrastive_loss
 
         if not return_dict:
             if loss is not None:
@@ -151,8 +165,10 @@ class VisionEncoderDecoderModelWithTriplet(VisionEncoderDecoderModel):
             else:
                 return decoder_outputs + encoder_outputs
 
-        return Seq2SeqLMOutput(
+        return Seq2SeqLMOutputWithContrastive(
             loss=loss,
+            entropy_loss=ce_loss,
+            contrastive_loss=contrastive_loss,
             logits=decoder_outputs.logits,
             past_key_values=decoder_outputs.past_key_values,
             decoder_hidden_states=decoder_outputs.hidden_states,

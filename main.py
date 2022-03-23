@@ -29,6 +29,7 @@ logger = logging.get_logger(__name__)
 ### CONFIGURATIONS ###
 
 type = "TRAIN"  # TRAIN
+loss_type = LossType.ENTROPY_TRIPLET
 
 random_seed = 42
 random.seed(random_seed)
@@ -41,9 +42,8 @@ train_dataset_size = -1  # set -1 to use whole dataset
 validation_dataset_size = -1  # set -1 to use whole dataset
 
 # TRAIN CONFIG
-loss_type = LossType.ENTROPY
 step = 0
-train_batch_size = 32
+train_batch_size = 16
 eval_batch_size = 128
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_workers = 4
@@ -75,23 +75,23 @@ generation_config = GenerationConfig(
     length_penalty=1.0,
     no_repeat_ngram_size=0,
     bad_words_ids=None,
-    early_stopping=False
+    early_stopping=True,
 )
 
-triplet_margin = 0.1
+triplet_margin = 1.0
 pretrained_text_embedder = "bert-base-uncased"
-negative_sample_type = NegativeSampleType.RANDOM  # NegativeSampleType.SAME_SUBCATEGORY
+negative_sample_type = NegativeSampleType.SAME_SUBCATEGORY  # NegativeSampleType.SAME_SUBCATEGORY
 
 # Tensorboard Monitoring
-experiment_name = "entropy_10epoch_fixeos_2"
+experiment_name = "entropy_triplet_10epoch"
 log_path = os.path.join("tensorboard", experiment_name)
 checkpoints_path = os.path.join("checkpoints", experiment_name)  # drive_path + 'checkpoints/'
 
-checkpoint = None # "checkpoints/entropy_10epoch_19030037/checkpoint-49500"
-
+# checkpoint = "./checkpoints/entropy_10epoch_fixeos_2/checkpoint-40705"  
+checkpoint = None
 
 # Evaluation metrics
-validation_metrics = ["sacrebleu", "meteor", "rouge"]  # , "modules/metrics/eng_bertscore.py"]
+validation_metrics = ["sacrebleu", "meteor", "rouge"] #, "modules/metrics/eng_bertscore.py"]
 validation_metrics = [load_metric(v) for v in validation_metrics]
 
 # component configurations
@@ -165,13 +165,13 @@ training_args = Seq2SeqTrainingArguments(
     dataloader_num_workers=num_workers,
 )
 
+callbacks = [EarlyStoppingCallback(early_stopping_patience=patience), GPUStatsMonitor()]
+
 trainer = CustomTrainer(
     tokenizer=encoder_decoder_components.tokenizer,
     generation_config=generation_config,
     triplet_margin=triplet_margin,
-    triplet_text_embedder=bert,
-    triplet_text_tokenizer=bert_tokenizer,
-    max_text_embedding_length=generation_config.max_length,
+    triplet_text_embedder=pretrained_text_embedder,
     loss_type=loss_type,
     compute_metrics=partial(
         compute_metrics, validation_metrics=validation_metrics, tokenizer=encoder_decoder_components.tokenizer
@@ -180,9 +180,9 @@ trainer = CustomTrainer(
     args=training_args,  # training arguments, defined above
     train_dataset=data_train,  # training dataset
     eval_dataset=data_val,  # evaluation dataset
+    callbacks=callbacks,
 )
 
-callbacks = [EarlyStoppingCallback(early_stopping_patience=patience), GPUStatsMonitor()]
 
 if type == "TRAIN":
     trainer.train(resume_from_checkpoint=checkpoint)
