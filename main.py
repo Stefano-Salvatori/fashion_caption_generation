@@ -2,8 +2,6 @@ import random
 import torch
 from datasets import load_metric
 from transformers import (
-    AutoModel,
-    AutoTokenizer,
     EarlyStoppingCallback,
     SchedulerType,
     ViTFeatureExtractor,
@@ -28,7 +26,7 @@ logger = logging.get_logger(__name__)
 # command line
 ### CONFIGURATIONS ###
 
-type = "TRAIN"  # TRAIN
+type = "TEST"  # TRAIN
 loss_type = LossType.ENTROPY_TRIPLET
 
 random_seed = 42
@@ -57,7 +55,7 @@ lr_scheduler_type = SchedulerType.COSINE
 learning_rate = 2e-5
 warmup_steps = 500
 weight_decay = 0.01
-num_train_epochs = 10
+num_train_epochs = 20
 
 predict_with_generate = True
 
@@ -66,7 +64,7 @@ generation_config = GenerationConfig(
     max_length=max_captions_length,
     min_length=0,
     do_sample=False,
-    num_beams=1,
+    num_beams=1 if type == "TRAIN" else 3, # we increase num_beams when er measure metrics
     temperature=1.0,
     top_k=50,
     top_p=1.0,
@@ -83,25 +81,16 @@ pretrained_text_embedder = "bert-base-uncased"
 negative_sample_type = NegativeSampleType.SAME_SUBCATEGORY  # NegativeSampleType.SAME_SUBCATEGORY
 
 # Tensorboard Monitoring
-experiment_name = "entropy_triplet_10epoch"
+experiment_name = "entropy_triplet_hard_10epoch"
 log_path = os.path.join("tensorboard", experiment_name)
 checkpoints_path = os.path.join("checkpoints", experiment_name)  # drive_path + 'checkpoints/'
 
-# checkpoint = "./checkpoints/entropy_10epoch_fixeos_2/checkpoint-40705"  
-checkpoint = None
-
+checkpoint = "./checkpoints/entropy_triplet_hard_10epoch/checkpoint-113967"
 # Evaluation metrics
-validation_metrics = ["sacrebleu", "meteor", "rouge"] #, "modules/metrics/eng_bertscore.py"]
+validation_metrics = ["sacrebleu", "meteor", "rouge", "modules/metrics/eng_bertscore.py"]
 validation_metrics = [load_metric(v) for v in validation_metrics]
 
-# component configurations
-# vit_bert = ModelComponents(
-#     encoder_checkpoint="google/vit-base-patch16-224-in21k",
-#     decoder_checkpoint="bert-base-uncased",
-#     img_processor=ViTFeatureExtractor,
-#     generation_config=generation_config,
-# )
-
+# Model Encoder-Decoder Components
 encoder_decoder_components = ModelComponents(
     encoder_checkpoint="google/vit-base-patch16-224-in21k",
     decoder_checkpoint="gpt2",
@@ -119,7 +108,7 @@ data_train = FashionGenTorchDataset(
     img_processor=encoder_decoder_components.img_processor,
     n_samples=train_dataset_size,
     max_text_length=max_captions_length,
-    sample_negative=loss_type == LossType.ENTROPY_TRIPLET,
+    sample_negative=loss_type == LossType.ENTROPY_TRIPLET and type != "TEST",
     negative_sample_type=negative_sample_type,
 )
 data_val = FashionGenTorchDataset(
@@ -128,17 +117,9 @@ data_val = FashionGenTorchDataset(
     img_processor=encoder_decoder_components.img_processor,
     n_samples=validation_dataset_size,
     max_text_length=max_captions_length,
-    sample_negative=loss_type == LossType.ENTROPY_TRIPLET,
+    sample_negative=loss_type == LossType.ENTROPY_TRIPLET and type != "TEST",
     negative_sample_type=negative_sample_type,
 )
-
-if loss_type == LossType.ENTROPY_TRIPLET:
-    # TODO: replace manual bert encoding with huggingface pipeline ("feature-extraction")
-    bert = AutoModel.from_pretrained(pretrained_text_embedder)
-    bert_tokenizer = AutoTokenizer.from_pretrained(pretrained_text_embedder)
-    bert = bert.to(device)
-else:
-    bert, bert_tokenizer = None, None
 
 training_args = Seq2SeqTrainingArguments(
     dataloader_pin_memory=not device.type == "cuda",
@@ -163,6 +144,7 @@ training_args = Seq2SeqTrainingArguments(
     weight_decay=weight_decay,  # strength of weight decay
     seed=random_seed,
     dataloader_num_workers=num_workers,
+    ignore_data_skip=True,
 )
 
 callbacks = [EarlyStoppingCallback(early_stopping_patience=patience), GPUStatsMonitor()]

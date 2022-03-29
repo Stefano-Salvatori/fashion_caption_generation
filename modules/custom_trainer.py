@@ -8,7 +8,8 @@ from transformers.integrations import TensorBoardCallback
 from transformers.utils import logging
 from modules.train_utils import GenerationConfig, LossType
 from transformers.deepspeed import is_deepspeed_zero3_enabled
-
+from pytorch_metric_learning import losses
+from pytorch_metric_learning import miners
 
 if version.parse(torch.__version__) >= version.parse("1.6"):
     from torch.cuda.amp import autocast
@@ -29,14 +30,14 @@ class CustomTrainer(Seq2SeqTrainer):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self.triplet_margin = triplet_margin
         self.loss_type = loss_type
         self.tokenizer = tokenizer
         # self.generation_function = generation_function if generation_function else self.model.generate
         self.generation_config = generation_config
 
         self.text_feature_extractor = self._pipeline_from_embedder(triplet_text_embedder, self.model.device.index)
-
+        self.miner_func = miners.TripletMarginMiner(margin=triplet_margin, type_of_triplets="semihard")
+        self.loss_func = losses.TripletMarginLoss(margin=triplet_margin, swap=True)
         # move Tensorboard Callback to last position so it can log all log items added in other callbacks
         for i, cb in enumerate(self.callback_handler.callbacks):
             if isinstance(cb, TensorBoardCallback):
@@ -48,7 +49,9 @@ class CustomTrainer(Seq2SeqTrainer):
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
         Subclass and override for custom behavior.
         """
-        negative = inputs.pop("negative_pixel_values") if self.loss_type == LossType.ENTROPY_TRIPLET else None
+        negative = inputs.pop("negative_pixel_values", None)
+        positive_labels = inputs.pop("positive_label", None)
+        negative_labels = inputs.pop("negative_label", None)
         if self.label_smoother is not None and "labels" in inputs:
             labels = inputs.pop("labels")
         else:
@@ -72,22 +75,25 @@ class CustomTrainer(Seq2SeqTrainer):
                 decoder_start_token_id=self.tokenizer.bos_token_id,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
-                early_stopping=True
+                early_stopping=True,
             )
             caption = self.tokenizer.batch_decode(caption, skip_special_tokens=True)
             # TODO: probably it is better to create a custom pipeline that returns tensors instead of lists
+            # Take CLS embedding for each generated caption
             caption_embedding = torch.tensor(
                 self.text_feature_extractor(caption, batch_size=len(caption)), device=self.model.device
+            )[:, 0, 0, :]
+            # concat and normalize embeddings
+            embeddings = torch.cat(
+                (
+                    torch.nn.functional.normalize(caption_embedding),
+                    torch.nn.functional.normalize(positive_img_embedding),
+                    torch.nn.functional.normalize(negative_img_embedding),
+                )
             )
-            # Take CLS embedding for each generated caption
-            caption_embedding = caption_embedding[:, 0, 0, :]
-            triplet_loss = torch.nn.functional.triplet_margin_loss(
-                anchor=torch.nn.functional.normalize(caption_embedding, dim=1),
-                positive=torch.nn.functional.normalize(positive_img_embedding, dim=1),
-                negative=torch.nn.functional.normalize(negative_img_embedding, dim=1),
-                margin=self.triplet_margin,
-                swap=True,
-            )
+            labels = torch.cat((positive_labels, positive_labels, negative_labels))
+            hard_pairs = self.miner_func(embeddings, labels)
+            triplet_loss = self.loss_func(embeddings, labels, hard_pairs)
             final_loss = entropy_loss + triplet_loss
             self.log(
                 {"triplet_loss": torch.mean(triplet_loss).item(), "entropy_loss": torch.mean(entropy_loss).item()}
@@ -157,8 +163,8 @@ class CustomTrainer(Seq2SeqTrainer):
             generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
 
         input_copy = inputs.copy()
-        if self.loss_type == LossType.ENTROPY_TRIPLET:
-            input_copy.pop("negative_pixel_values")
+        for pop_key in ["negative_pixel_values", "positive_label", "negative_label"]:
+            input_copy.pop(pop_key, None)
 
         with torch.no_grad():
             if self.use_amp:

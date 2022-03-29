@@ -70,6 +70,8 @@ class FashionGenTorchDataset(torch.utils.data.Dataset):
         if self.sample_negative:
             negative_product = self.get_negative(product)
             to_return["negative_pixel_values"] = self.preprocess_image(negative_product.image)
+            to_return["positive_label"] = product.p_id
+            to_return["negative_label"] = negative_product.p_id
 
         if self.return_index:
             to_return["idx"] = idx
