@@ -1,7 +1,7 @@
 checkpoints
 best
-predictions
-predictions_bk
-tensorboard
 **/__pycache__
+predictions/
+predictions_bk/
+tensorboard
 misc_test.py
