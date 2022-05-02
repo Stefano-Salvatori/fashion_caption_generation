@@ -26,7 +26,7 @@ logger = logging.get_logger(__name__)
 # command line
 ### CONFIGURATIONS ###
 
-type = "TEST"  # TRAIN
+type = "TRAIN"  # TRAIN or TEST
 loss_type = LossType.ENTROPY_TRIPLET
 
 random_seed = 42
@@ -47,9 +47,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_workers = 4
 
 
-save_total_limit = 4
+save_total_limit = 2
 patience = 3
-save_steps = 500
 logging_steps = 25
 lr_scheduler_type = SchedulerType.COSINE
 learning_rate = 2e-5
@@ -64,7 +63,7 @@ generation_config = GenerationConfig(
     max_length=max_captions_length,
     min_length=0,
     do_sample=False,
-    num_beams=1 if type == "TRAIN" else 3, # we increase num_beams when er measure metrics
+    num_beams=1 if type == "TRAIN" else 3, # we increase num_beams when we measure metrics
     temperature=1.0,
     top_k=50,
     top_p=1.0,
@@ -85,9 +84,10 @@ experiment_name = "entropy_triplet_hard_10epoch"
 log_path = os.path.join("tensorboard", experiment_name)
 checkpoints_path = os.path.join("checkpoints", experiment_name)  # drive_path + 'checkpoints/'
 
-checkpoint = "./checkpoints/entropy_triplet_hard_10epoch/checkpoint-113967"
+# checkpoint = "./checkpoints/entropy_triplet_hard_10epoch/checkpoint-113967"
+checkpoint = None
 # Evaluation metrics
-validation_metrics = ["sacrebleu", "meteor", "rouge", "modules/metrics/eng_bertscore.py"]
+validation_metrics = ["sacrebleu", "meteor", "rouge"] #, "modules/metrics/eng_bertscore.py"]
 validation_metrics = [load_metric(v) for v in validation_metrics]
 
 # Model Encoder-Decoder Components
@@ -136,7 +136,6 @@ training_args = Seq2SeqTrainingArguments(
     evaluation_strategy="epoch",
     save_strategy="epoch",
     save_total_limit=save_total_limit,  # Only last [save_total_limit] models are saved. Older ones are deleted.
-    save_steps=save_steps,
     learning_rate=learning_rate,
     lr_scheduler_type=lr_scheduler_type,
     num_train_epochs=num_train_epochs,  # total number of training epochs
@@ -168,6 +167,7 @@ trainer = CustomTrainer(
 
 if type == "TRAIN":
     trainer.train(resume_from_checkpoint=checkpoint)
+    trainer.save_model()
 elif type == "TEST":
     predictions: PredictionOutput = trainer.predict(test_dataset=data_val)
     trainer.save_metrics("test", predictions.metrics)

@@ -23,7 +23,7 @@ def _prepare_input(data: Union[torch.Tensor, Any], device: torch.device) -> Unio
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 validation_dataset_path = "/home/salvatori/datasets/FashionGen/fashiongen_validation.h5"
 
-checkpoint = "./checkpoints/entropy_10epoch_fixeos_2/checkpoint-16282"
+checkpoint = "./checkpoints/entropy_triplet_hard_10epoch/checkpoint-113967"
 
 max_captions_length = 128
 min_captions_length = 0
@@ -31,7 +31,7 @@ generation_config = GenerationConfig(
     max_length=max_captions_length,
     min_length=min_captions_length,
     do_sample=False,
-    num_beams=1,
+    num_beams=3,
     temperature=1.0,
     top_k=50,
     top_p=1.0,
@@ -65,7 +65,7 @@ dataset = FashionGenTorchDataset(
     return_index=True,
 )
 fashiongen = dataset.get_fashiongen()
-dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
 
 gen_kwargs = dataclasses.asdict(generation_config)
@@ -84,4 +84,5 @@ for batch in dataloader:
     print(output)
     print(f"REAL: {product.decoded_caption()}")
     img.save("img.png")
+    break
 
