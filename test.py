@@ -21,7 +21,7 @@ def _prepare_input(data: Union[torch.Tensor, Any], device: torch.device) -> Unio
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-validation_dataset_path = "/home/salvatori/datasets/FashionGen/fashiongen_validation.h5"
+validation_dataset_path = "/datasets/FashionGen/fashiongen_validation.h5"
 
 checkpoint = "./checkpoints/entropy_triplet_hard_10epoch/checkpoint-113967"
 
@@ -65,7 +65,7 @@ dataset = FashionGenTorchDataset(
     return_index=True,
 )
 fashiongen = dataset.get_fashiongen()
-dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
 
 gen_kwargs = dataclasses.asdict(generation_config)
